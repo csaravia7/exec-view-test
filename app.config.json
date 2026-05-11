@@ -3,12 +3,14 @@
   "environmentUrl": "https://yaj06303.sprint.apps.dynatracelabs.com/",
   "app": {
     "name": "exec-view-test",
-    "version": "0.0.0",
+    "version": "0.0.7",
     "description": "A starting project with routing, fetching data, and charting",
     "id": "my.exec.view.test",
     "scopes": [
       { "name": "storage:logs:read", "comment": "default template" },
-      { "name": "storage:buckets:read", "comment": "default template" }
+      { "name": "storage:buckets:read", "comment": "default template" },
+      { "name": "storage:metrics:read", "comment": "read RUM timeseries metrics" },
+      { "name": "storage:entities:read", "comment": "lookup application entity names" }
     ]
   }
 }

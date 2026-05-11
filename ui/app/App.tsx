@@ -3,7 +3,7 @@ import React from "react";
 import { Route, Routes } from "react-router-dom";
 import { Data } from "./pages/Data";
 import { Header } from "./components/Header";
-import { Home } from "./pages/Home";
+import { Executive } from "./pages/Executive";
 
 export const App = () => {
   return (
@@ -13,8 +13,8 @@ export const App = () => {
       </Page.Header>
       <Page.Main>
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/data" element={<Data />} />
+          <Route path="/" element={<Executive />} />
+          {/* <Route path="/data" element={<Data />} /> */}
         </Routes>
       </Page.Main>
     </Page>
