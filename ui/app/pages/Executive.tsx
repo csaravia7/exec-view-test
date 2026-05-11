@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+import {
+  TimeseriesChart,
+  convertToTimeseries,
+} from "@dynatrace/strato-components-preview/charts";
 import { useDql } from "@dynatrace-sdk/react-hooks";
 import { ChannelDetail } from "./ChannelDetail";
 
@@ -64,10 +68,6 @@ type AppRecord = {
   revenue: number | null;
 };
 
-type TrendRecord = {
-  availability: (number | null)[] | null;
-};
-
 const TIMEFRAMES = [
   { id: "5m", label: "Last 5m" },
   { id: "10m", label: "Last 10m" },
@@ -112,7 +112,7 @@ const buildTrendQuery = (timeframe: TimeframeId) => `
 timeseries {
   availability = avg(app.availability)
 }, from: now() - ${timeframe}, interval: ${TREND_INTERVALS[timeframe]}
-| fields availability
+| fields timeframe, interval, availability
 `;
 
 const SLA_GOOD = 99;
@@ -151,14 +151,23 @@ export const Executive = () => {
     [snapData]
   );
 
-  const avgAvailabilityTrend = useMemo<number[]>(() => {
-    const records = (trendData?.records ?? []) as unknown as TrendRecord[];
-    const firstRecord = records[0];
-    if (!firstRecord?.availability) return [];
+  const trendSeries = useMemo(() => {
+    if (!trendData?.records || !trendData?.types) return [];
+    return convertToTimeseries(trendData.records, trendData.types);
+  }, [trendData]);
 
-    return firstRecord.availability.map((value) =>
-      value == null ? NaN : value
-    );
+  const latestTrendValue = useMemo(() => {
+    const records = trendData?.records as
+      | Array<{ availability?: Array<number | null> | null }>
+      | undefined;
+    const values = records?.[0]?.availability ?? [];
+
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const value = values[index];
+      if (value != null && !Number.isNaN(value)) return value;
+    }
+
+    return null;
   }, [trendData]);
 
   // Live clock for the header.
@@ -353,7 +362,12 @@ export const Executive = () => {
 
           <SectionTitle>{`Availability trend · ${timeframeLabel.toLowerCase()}`}</SectionTitle>
           <Panel>
-            <TrendChart values={avgAvailabilityTrend} timeframeLabel={timeframeLabel} />
+            <TrendChart
+              series={trendSeries}
+              loading={!trendData}
+              latestValue={latestTrendValue}
+              timeframeLabel={timeframeLabel}
+            />
           </Panel>
         </>
       )}
@@ -880,130 +894,49 @@ const StatusBadge = ({
 // ---------------------------------------------------------------------------
 
 const TrendChart = ({
-  values,
+  series,
+  loading,
+  latestValue,
   timeframeLabel,
 }: {
-  values: number[];
+  series: ReturnType<typeof convertToTimeseries>;
+  loading: boolean;
+  latestValue: number | null;
   timeframeLabel: string;
 }) => {
-  const width = 1000;
-  const height = 220;
-  const padding = { top: 16, right: 16, bottom: 28, left: 44 };
-  const innerW = width - padding.left - padding.right;
-  const innerH = height - padding.top - padding.bottom;
-
-  // Domain: focus on the SLA-relevant range so small drops are visible.
-  const allValues = values.filter((value) => !Number.isNaN(value));
-  const dataMin = allValues.length ? Math.min(...allValues) : 95;
-  const minY = Math.min(95, Math.floor(dataMin - 1));
-  const maxY = 100;
-
-  const len = Math.max(1, values.length);
-  const xAt = (i: number) =>
-    padding.left + (len <= 1 ? innerW / 2 : (i / (len - 1)) * innerW);
-  const yAt = (v: number) =>
-    padding.top + innerH - ((v - minY) / (maxY - minY)) * innerH;
-
-  const path = values
-    .map((value, index) => {
-      if (Number.isNaN(value)) return null;
-      return `${index === 0 ? "M" : "L"} ${xAt(index)} ${yAt(value)}`;
-    })
-    .filter(Boolean)
-    .join(" ");
-
-  const latestValue = [...allValues].pop();
-
-  const yTicks = 4;
-  const ticks = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const v = minY + ((maxY - minY) * i) / yTicks;
-    return { v, y: yAt(v) };
-  });
+  const hasData = series.length > 0;
 
   return (
     <div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        style={{ width: "100%", height: 240, display: "block" }}
-      >
-        {ticks.map((t, i) => (
-          <g key={i}>
-            <line
-              x1={padding.left}
-              x2={width - padding.right}
-              y1={t.y}
-              y2={t.y}
-              stroke={T.border}
-              strokeDasharray="3 4"
-              strokeWidth={1}
-            />
-            <text
-              x={padding.left - 8}
-              y={t.y + 4}
-              textAnchor="end"
-              fontSize={10}
-              fill={T.textMuted}
-            >
-              {t.v.toFixed(0)}%
-            </text>
-          </g>
-        ))}
-
-        <line
-          x1={padding.left}
-          x2={width - padding.right}
-          y1={yAt(SLA_GOOD)}
-          y2={yAt(SLA_GOOD)}
-          stroke={T.good}
-          strokeDasharray="2 6"
-          strokeWidth={1}
-          opacity={0.6}
-        />
-        <text
-          x={width - padding.right}
-          y={yAt(SLA_GOOD) - 6}
-          textAnchor="end"
-          fontSize={10}
-          fill={T.good}
-          opacity={0.8}
+      {hasData || loading ? (
+        <TimeseriesChart
+          data={series}
+          variant="line"
+          gapPolicy="connect"
+          curve="linear"
+          height={240}
+          loading={loading}
         >
-          SLA {SLA_GOOD}%
-        </text>
-
-        {path && (
-          <path
-            d={path}
-            stroke="var(--dt-color-accent-primary, Highlight)"
-            strokeWidth={3}
-            fill="none"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        )}
-
-        <text x={padding.left} y={height - 8} fontSize={10} fill={T.textMuted}>
-          {timeframeLabel.replace("Last ", "-").toLowerCase()}
-        </text>
-        <text
-          x={padding.left + innerW / 2}
-          y={height - 8}
-          fontSize={10}
-          fill={T.textMuted}
-          textAnchor="middle"
+          <TimeseriesChart.YAxis min={0} max={100} label="Availability (%)" />
+          <TimeseriesChart.Tooltip variant="shared" />
+          <TimeseriesChart.Legend hidden />
+        </TimeseriesChart>
+      ) : (
+        <div
+          style={{
+            height: 240,
+            display: "grid",
+            placeItems: "center",
+            color: T.textMuted,
+            fontSize: 12,
+            border: `1px dashed ${T.border}`,
+            borderRadius: 10,
+            background: T.bgPanelAlt,
+          }}
         >
-          -3h
-        </text>
-        <text
-          x={width - padding.right}
-          y={height - 8}
-          fontSize={10}
-          fill={T.textMuted}
-          textAnchor="end"
-        >
-          now
-        </text>
-      </svg>
+          No trend data available for {timeframeLabel.toLowerCase()}.
+        </div>
+      )}
 
       <div
         style={{
@@ -1013,7 +946,7 @@ const TrendChart = ({
           marginTop: 8,
         }}
       >
-        {allValues.length > 0 ? (
+        {hasData ? (
           <div
             style={{
               display: "inline-flex",

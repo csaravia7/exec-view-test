@@ -3,7 +3,7 @@
   "environmentUrl": "https://yaj06303.sprint.apps.dynatracelabs.com/",
   "app": {
     "name": "exec-view-test",
-    "version": "0.0.7",
+    "version": "0.0.8",
     "description": "A starting project with routing, fetching data, and charting",
     "id": "my.exec.view.test",
     "scopes": [
