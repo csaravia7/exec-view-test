@@ -63,6 +63,7 @@ type AppRow = {
   revenue: number | null;
 };
 
+
 const TIMEFRAMES = [
   { id: "5m", label: "Last 5m" },
   { id: "10m", label: "Last 10m" },

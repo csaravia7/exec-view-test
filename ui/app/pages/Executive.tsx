@@ -3,10 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useDql } from "@dynatrace-sdk/react-hooks";
 import { ChannelDetail } from "./ChannelDetail";
 
-// ---------------------------------------------------------------------------
-// Premium "boardroom" dark theme tokens — intentionally inline so the page is
-// self-contained and doesn't depend on the user's light/dark Strato theme.
-// ---------------------------------------------------------------------------
+
 const T = {
   bg: "var(--exec-bg)",
   bgPanel: "var(--exec-panel)",
