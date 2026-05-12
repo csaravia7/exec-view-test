@@ -327,7 +327,7 @@ export const Executive = () => {
             loading={snapLoading}
           />
 
-          <SectionTitle>Channels</SectionTitle>
+          {/* <SectionTitle>Channels</SectionTitle>
           <div
             style={{
               display: "grid",
@@ -358,7 +358,7 @@ export const Executive = () => {
                 </div>
               </Panel>
             )}
-          </div>
+          </div> */}
 
           <SectionTitle>{`Availability trend · ${timeframeLabel.toLowerCase()}`}</SectionTitle>
           <Panel>

@@ -120,6 +120,7 @@ export const ChannelDetail = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
   const lastHandledRefreshNonce = useRef<number | null>(null);
+  const cardsGridRef = useRef<HTMLDivElement | null>(null);
 
   const timeframe = controlledTimeframe ?? localTimeframe;
   const usesExternalControls = controlledTimeframe !== undefined;
@@ -215,6 +216,51 @@ export const ChannelDetail = ({
       media.removeEventListener("change", updateAppearance);
       observer.disconnect();
     };
+  }, []);
+
+  const exportToCsv = useCallback(() => {
+    const headers = [
+      "app_name",
+      "app_id",
+      "availability",
+      "status",
+      "connected_users",
+      "requests",
+      "errors",
+      "revenue_pen",
+    ];
+
+    const rows = visibleApps.map((app) => [
+      app.app_name ?? app.app ?? "",
+      app.app ?? "",
+      app.availability != null ? app.availability.toFixed(2) : "",
+      pickStatus(app.availability),
+      String(app.connected_users ?? 0),
+      String(app.requests ?? 0),
+      String(app.errors ?? 0),
+      String(app.revenue ?? 0),
+    ]);
+
+    const csv = [headers, ...rows]
+      .map((row) => row.map(escapeCsvValue).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = `channel-detail-${timeframe}-${timestamp}.csv`;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [timeframe, visibleApps]);
+
+  const printCardsGrid = useCallback(() => {
+    if (!cardsGridRef.current) return;
+    window.print();
   }, []);
 
   const themeVars =
@@ -332,6 +378,30 @@ export const ChannelDetail = ({
         </Panel>
       )}
 
+      <style>
+        {`
+          @media print {
+            body * {
+              visibility: hidden !important;
+            }
+
+            #channel-detail-cards-grid,
+            #channel-detail-cards-grid * {
+              visibility: visible !important;
+            }
+
+            #channel-detail-cards-grid {
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 100% !important;
+              margin: 0 !important;
+              padding: 12px !important;
+            }
+          }
+        `}
+      </style>
+
       <div
         style={{
           display: "grid",
@@ -363,6 +433,94 @@ export const ChannelDetail = ({
       </div>
 
       <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: 14,
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          type="button"
+          onClick={exportToCsv}
+          disabled={isLoading || visibleApps.length === 0}
+          style={{
+            background: T.bgPanel,
+            color: T.textPrimary,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: isLoading || visibleApps.length === 0 ? "not-allowed" : "pointer",
+            opacity: isLoading || visibleApps.length === 0 ? 0.6 : 1,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M12 3v10m0 0 4-4m-4 4-4-4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Export CSV
+        </button>
+        <button
+          type="button"
+          onClick={printCardsGrid}
+          disabled={isLoading || visibleApps.length === 0}
+          style={{
+            background: T.bgPanel,
+            color: T.textPrimary,
+            border: `1px solid ${T.border}`,
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: isLoading || visibleApps.length === 0 ? "not-allowed" : "pointer",
+            opacity: isLoading || visibleApps.length === 0 ? 0.6 : 1,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M7 8V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v3M7 17h10v4H7v-4Zm12 0h1a2 2 0 0 0 2-2v-4a3 3 0 0 0-3-3H5a3 3 0 0 0-3 3v4a2 2 0 0 0 2 2h1"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Print Cards
+        </button>
+      </div>
+
+      <div
+        id="channel-detail-cards-grid"
+        ref={cardsGridRef}
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
@@ -947,6 +1105,13 @@ const formatCurrency = (value: number) =>
         maximumFractionDigits: 0,
       })
     : "—";
+
+const escapeCsvValue = (value: string) => {
+  if (/[,"\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+};
 
 const availabilityTileBackground = (availability: number | null, isDark: boolean) => {
   if (availability == null) return "var(--app-panel)";

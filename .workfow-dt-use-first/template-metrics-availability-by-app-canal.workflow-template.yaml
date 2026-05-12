@@ -1,0 +1,984 @@
+metadata:
+  version: '1'
+  dependencies:
+    apps:
+    - id: dynatrace.automations
+      version: ^1.3023.1
+  inputs: []
+workflow:
+  title: Template - Metrics Availability by App/Canal
+  description: ''
+  schemaVersion: 4
+  trigger:
+    schedule:
+      isActive: true
+      trigger:
+        type: interval
+        intervalMinutes: 1
+      filterParameters:
+        earliestStart: '2026-05-04'
+        earliestStartTime: '14:03'
+      timezone: America/Lima
+      inputs: {}
+  result: null
+  type: STANDARD
+  input: {}
+  hourlyExecutionLimit: 1000
+  guide: null
+  tasks:
+    run_javascript_1:
+      name: run_javascript_1
+      input:
+        script: "import { metricsClient } from '@dynatrace-sdk/client-classic-environment-v2';\n\
+          \n/**\n * ════════════════════════════════════════════════════════════════════════════\n\
+          \ *  Ingesta de métricas — Canales Digitales Financieros\n *  Formato: MINT\
+          \  →  <metricKey>,<dimensions> <value>\n *\n *  Métricas ingestadas (todas\
+          \ correlacionadas entre sí):\n *    · app.availability          → % disponibilidad\
+          \ del servicio\n *    · app.users.connected       → usuarios activos en\
+          \ sesión\n *    · app.requests              → total de requests por minuto\
+          \ (RPM)\n *    · app.request.errors        → errores HTTP 4xx y 5xx (derivados\
+          \ del RPM)\n *    · app.transactions.revenue  → ingresos por transacciones\
+          \ (S/ por minuto)\n *\n *  Lógica de coherencia:\n *    - Todos los valores\
+          \ se derivan del estado de disponibilidad (availability).\n *    - A menor\
+          \ disponibilidad → menos usuarios → menos requests → más errores\n *   \
+          \   → menos revenue. Los números siempre cuentan la misma historia.\n *\
+          \ ════════════════════════════════════════════════════════════════════════════\n\
+          \ */\n\n// ── Catálogo de aplicaciones ──────────────────────────────────────────────────\n\
+          \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
+          \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
+          \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
+          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'Banca Empresas',\n\
+          \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
+          \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
+          \ name: 'Web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
+          \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
+          \ 3200.00,\n  },\n  {\n    app: 'onboarding-digital',  name: 'Onboarding\
+          \ Digital',\n    environment: 'produccion',  canal: 'web',\n    baseUsers:\
+          \ 2400,   baseRpm: 1800,  revenuePerTx: 0.00,\n  },\n  {\n    app: 'core-pagos-api',\
+          \      name: 'Core Pagos API',\n    environment: 'produccion',  canal: 'api',\n\
+          \    baseUsers: 0,      baseRpm: 22000, revenuePerTx: 85.00,\n  },\n  {\n\
+          \    app: 'cajero-virtual-atm',  name: 'Cajero Virtual ATM',\n    environment:\
+          \ 'produccion',  canal: 'atm',\n    baseUsers: 5500,   baseRpm: 3800,  revenuePerTx:\
+          \ 0.00,\n  },\n  {\n    app: 'app-seguros-vida',    name: 'App Seguros de\
+          \ Vida',\n    environment: 'produccion',  canal: 'mobile',\n    baseUsers:\
+          \ 4200,   baseRpm: 2900,  revenuePerTx: 620.00,\n  },\n  {\n    app: 'plataforma-creditos',\
+          \ name: 'Plataforma de Créditos',\n    environment: 'produccion',  canal:\
+          \ 'web',\n    baseUsers: 6800,   baseRpm: 5100,  revenuePerTx: 1400.00,\n\
+          \  },\n];\n\n// ── Rangos de disponibilidad ──────────────────────────────────────────────────\n\
+          \nconst RANGES = {\n  STABLE:   { min: 90,  max: 100 },   // operación normal\n\
+          \  DEGRADED: { min: 80,  max: 89  },   // servicio degradado\n  OUTAGE:\
+          \   { min: 0,   max: 79  },   // caída crítica\n};\n\n/**\n * Pesos para\
+          \ modo estable (operación habitual):\n *   96 % → STABLE · 3 % → DEGRADED\
+          \ · 1 % → OUTAGE\n */\nconst STABLE_WEIGHTS = { STABLE: 0.96, DEGRADED:\
+          \ 0.03, OUTAGE: 0.01 };\n\n// ── Estado de disrupción activa ───────────────────────────────────────────────\n\
+          \n/**\n * Map<appId, { type: 'OUTAGE'|'DEGRADED', expiresAt: number|null\
+          \ }>\n * expiresAt = null  →  indefinida hasta clearDisruption()\n * expiresAt\
+          \ = ms    →  auto-limpieza al vencer\n */\nconst activeDisruptions = new\
+          \ Map();\n\n// ── Utilidades ────────────────────────────────────────────────────────────────\n\
+          \n/** Número aleatorio con N decimales en [min, max]. */\nfunction randomInRange(min,\
+          \ max, decimals = 2) {\n  return parseFloat((Math.random() * (max - min)\
+          \ + min).toFixed(decimals));\n}\n\n/** Ruido gaussiano suave (±sigma) sobre\
+          \ un valor base. */\nfunction jitter(base, sigma) {\n  // Box-Muller simplificado\n\
+          \  const u = 1 - Math.random();\n  const v = Math.random();\n  const z =\
+          \ Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);\n  return Math.max(0,\
+          \ base + z * sigma);\n}\n\n/** Clasifica la disponibilidad y retorna etiqueta,\
+          \ icono y tag MINT. */\nfunction getSeverity(availability) {\n  if (availability\
+          \ <= 15) return { label: 'OUTAGE',   icon: '\U0001F534', tag: 'outage' \
+          \  };\n  if (availability <= 79) return { label: 'DEGRADED', icon: '\U0001F7E1\
+          ', tag: 'degraded' };\n  return                         { label: 'STABLE',\
+          \   icon: '\U0001F7E2', tag: 'stable'   };\n}\n\n/** Elige rango ponderado\
+          \ para modo estable. */\nfunction pickStableRange() {\n  const r = Math.random();\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE)                             return 'OUTAGE';\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE + STABLE_WEIGHTS.DEGRADED)  return 'DEGRADED';\n\
+          \  return 'STABLE';\n}\n\n// ── Generación de disponibilidad (con soporte\
+          \ de disrupción) ──────────────────\n\nfunction resolveAvailability(appId)\
+          \ {\n  // Auto-limpiar disrupción vencida\n  const dis = activeDisruptions.get(appId);\n\
+          \  if (dis && dis.expiresAt !== null && Date.now() > dis.expiresAt) {\n\
+          \    activeDisruptions.delete(appId);\n    console.log(`  ⏱  Disrupción\
+          \ vencida y limpiada: ${appId}`);\n  }\n\n  const active = activeDisruptions.get(appId);\n\
+          \  if (active) {\n    const { min, max } = RANGES[active.type];\n    return\
+          \ { availability: randomInRange(min, max), source: `DISRUPTION:${active.type}`\
+          \ };\n  }\n\n  const rangeName   = pickStableRange();\n  const { min, max\
+          \ } = RANGES[rangeName];\n  return { availability: randomInRange(min, max),\
+          \ source: `STABLE_MODE:${rangeName}` };\n}\n\n// ── Motor de métricas coherentes\
+          \ ─────────────────────────────────────────────\n\n/**\n * Genera el conjunto\
+          \ completo de métricas para una aplicación.\n *\n * Relaciones de coherencia:\n\
+          \ *\n *  healthFactor = availability / 100\n *\n *  users    = baseUsers\
+          \  × healthFactor  (± ruido 3 %)\n *  requests = baseRpm    × healthFactor\
+          \  (± ruido 2 %)\n *\n *  Tasa de error base:\n *    STABLE   →  0.5 – 2\
+          \ %  de requests totales (casi todo 2xx)\n *    DEGRADED →  5 – 15 %   de\
+          \ requests totales\n *    OUTAGE   → 40 – 80 %   de requests totales\n *\n\
+          \ *  Distribución de errores:\n *    4xx (errores de cliente / autenticación)\
+          \ ≈ 30 % de los errores\n *    5xx (errores de servidor / timeout)     \
+          \ ≈ 70 % de los errores\n *    → En un outage predominan los 5xx (servidor\
+          \ caído).\n *\n *  revenue  = requests exitosos × (revenuePerTx × randomFactor)\n\
+          \ *    → Solo las transacciones sin error generan ingreso.\n */\nfunction\
+          \ generateAppMetrics(app) {\n  const { availability, source } = resolveAvailability(app.app);\n\
+          \  const { tag }                  = getSeverity(availability);\n  const\
+          \ healthFactor             = availability / 100;\n\n  // ── Usuarios conectados\
+          \ ───────────────────────────────────────────────────\n  const users = app.baseUsers\
+          \ > 0\n    ? Math.round(jitter(app.baseUsers * healthFactor, app.baseUsers\
+          \ * 0.03))\n    : 0;\n\n  // ── Requests por minuto ───────────────────────────────────────────────────\n\
+          \  const requests = Math.round(jitter(app.baseRpm * healthFactor, app.baseRpm\
+          \ * 0.02));\n\n  // ── Tasa de error según severidad ────────────────────────────────────────\n\
+          \  let errorRateMin, errorRateMax;\n  if (tag === 'outage') {\n    errorRateMin\
+          \ = 0.40; errorRateMax = 0.80;\n  } else if (tag === 'degraded') {\n   \
+          \ errorRateMin = 0.05; errorRateMax = 0.15;\n  } else {\n    errorRateMin\
+          \ = 0.005; errorRateMax = 0.02;\n  }\n  const errorRate   = randomInRange(errorRateMin,\
+          \ errorRateMax, 4);\n  const totalErrors = Math.round(requests * errorRate);\n\
+          \n  // ── Distribución 4xx / 5xx ────────────────────────────────────────────────\n\
+          \  // En outage: más 5xx (servidor); en degradado: más 4xx (timeouts de\
+          \ auth)\n  const ratio5xx    = tag === 'outage' ? randomInRange(0.65, 0.85,\
+          \ 2)\n                    : tag === 'degraded' ? randomInRange(0.50, 0.70,\
+          \ 2)\n                    : randomInRange(0.30, 0.50, 2);\n  const errors5xx\
+          \   = Math.round(totalErrors * ratio5xx);\n  const errors4xx   = totalErrors\
+          \ - errors5xx;\n\n  // ── Revenue ───────────────────────────────────────────────────────────────\n\
+          \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
+          \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
+          \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
+          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
+          \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
+          \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
+          \ * Todas comparten las mismas dimensiones para que sean fácilmente joinables\
+          \ en DQL.\n */\nfunction buildAllMintLines(appConfig) {\n  const m   = generateAppMetrics(appConfig);\n\
+          \  const dim = `app=${appConfig.app},environment=${appConfig.environment},canal=${appConfig.canal},status=${m.tag}`;\n\
+          \n  const lines = [\n    `app.availability,${dim} ${m.availability}`,\n\
+          \    `app.users.connected,${dim} ${m.users}`,\n    `app.requests,${dim}\
+          \ ${m.requests}`,\n    `app.request.errors,${dim},http_status=4xx ${m.errors4xx}`,\n\
+          \    `app.request.errors,${dim},http_status=5xx ${m.errors5xx}`,\n    `app.transactions.revenue,${dim}\
+          \ ${m.revenue}`,\n  ];\n\n  return { lines, metrics: m, appConfig };\n}\n\
+          \n// ── API de disrupción ─────────────────────────────────────────────────────────\n\
+          \n/**\n * simulateDisruption({ apps, type, durationMs })\n *\n * Activa\
+          \ una disrupción a demanda. Afecta TODAS las métricas de forma\n * coherente:\
+          \ menos disponibilidad → menos usuarios → más errores → menos revenue.\n\
+          \ *\n * @param {string[]} options.apps       IDs afectados, o ['ALL'] para\
+          \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
+          \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
+          \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
+          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
+          \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
+          \ = null } = {}) {\n  if (!['OUTAGE', 'DEGRADED'].includes(type)) {\n  \
+          \  console.error(`❌ Tipo inválido \"${type}\". Usar 'OUTAGE' o 'DEGRADED'.`);\n\
+          \    return;\n  }\n\n  const targets = apps.includes('ALL')\n    ? applications.map((a)\
+          \ => a.app)\n    : apps.filter((id) => {\n        const found = applications.find((a)\
+          \ => a.app === id);\n        if (!found) console.warn(`  ⚠️  App no encontrada:\
+          \ \"${id}\" — omitida.`);\n        return !!found;\n      });\n\n  if (targets.length\
+          \ === 0) {\n    console.error('❌ simulateDisruption: no se encontraron apps\
+          \ válidas.');\n    return;\n  }\n\n  const expiresAt = durationMs !== null\
+          \ ? Date.now() + durationMs : null;\n  const expLabel  = expiresAt ? `expira\
+          \ en ${(durationMs / 1000).toFixed(0)}s` : 'indefinida';\n\n  targets.forEach((id)\
+          \ => activeDisruptions.set(id, { type, expiresAt }));\n\n  console.log('');\n\
+          \  console.log('╔════════════════════════════════════════════════════════╗');\n\
+          \  console.log(`║  \U0001F6A8 DISRUPCIÓN ACTIVADA — ${type.padEnd(28)}║`);\n\
+          \  console.log('╚════════════════════════════════════════════════════════╝');\n\
+          \  console.log(`  Tipo      : ${type}`);\n  console.log(`  Duración  : ${expLabel}`);\n\
+          \  console.log(`  Rango     : ${RANGES[type].min} – ${RANGES[type].max}\
+          \ %`);\n  console.log(`  Apps      : ${targets.join(', ')}`);\n  console.log('\
+          \  Impacto   : availability ↓  →  users ↓  →  errors ↑  →  revenue ↓');\n\
+          \  console.log('');\n}\n\n/**\n * clearDisruption(apps?)\n * Restaura el\
+          \ modo estable. Sin args limpia todas.\n *\n * @example  clearDisruption(['core-pagos-api']);\n\
+          \ * @example  clearDisruption();\n */\nfunction clearDisruption(apps) {\n\
+          \  const targets = apps ? apps : [...activeDisruptions.keys()];\n\n  if\
+          \ (targets.length === 0) {\n    console.log('ℹ️  No hay disrupciones activas\
+          \ para limpiar.');\n    return;\n  }\n\n  targets.forEach((id) => activeDisruptions.delete(id));\n\
+          \n  console.log('');\n  console.log('✅ Disrupciones limpiadas — retorno\
+          \ a modo ESTABLE:');\n  console.log(`   ${targets.join(', ')}`);\n  console.log('');\n\
+          }\n\n/** Muestra un resumen de las disrupciones activas. */\nfunction listActiveDisruptions()\
+          \ {\n  if (activeDisruptions.size === 0) {\n    console.log('ℹ️  No hay\
+          \ disrupciones activas.');\n    return;\n  }\n  console.log('\\n── Disrupciones\
+          \ activas ────────────────────────────────────');\n  activeDisruptions.forEach(({\
+          \ type, expiresAt }, appId) => {\n    const remaining = expiresAt\n    \
+          \  ? `${Math.max(0, Math.round((expiresAt - Date.now()) / 1000))}s restantes`\n\
+          \      : 'indefinida';\n    console.log(`  \U0001F6A8 ${appId.padEnd(25)}\
+          \  ${type.padEnd(9)}  [${remaining}]`);\n  });\n  console.log('');\n}\n\n\
+          // ── Funciones de ingesta ──────────────────────────────────────────────────────\n\
+          \n/**\n * Ingesta todas las métricas de todas las apps en una sola llamada\
+          \ MINT.\n */\nasync function ingestAllMetrics() {\n  const results     =\
+          \ applications.map(buildAllMintLines);\n  const mintPayload = results.flatMap((r)\
+          \ => r.lines).join('\\n');\n\n  // ── Log de consola coherente ────────────────────────────────────────────\n\
+          \  console.log('╔══════════════════════════════════════════════════════════════════════════════╗');\n\
+          \  console.log('║  Ingesta de métricas — Canales Digitales Financieros \
+          \                       ║');\n  console.log('╚══════════════════════════════════════════════════════════════════════════════╝');\n\
+          \  console.log(\n    '  App'.padEnd(28) +\n    'Status'.padEnd(11) +\n \
+          \   'Avail'.padStart(7) +\n    'Users'.padStart(8) +\n    'RPM'.padStart(8)\
+          \ +\n    '4xx'.padStart(7) +\n    '5xx'.padStart(7) +\n    'Revenue (S/)'.padStart(15),\n\
+          \  );\n  console.log('  ' + '─'.repeat(88));\n\n  results.forEach(({ metrics:\
+          \ m, appConfig }) => {\n    const { icon, label } = getSeverity(m.availability);\n\
+          \    console.log(\n      `  ${icon} ${appConfig.app.padEnd(25)}` +\n   \
+          \   `${label.padEnd(9)}  ` +\n      `${String(m.availability).padStart(6)}%`\
+          \ +\n      `${String(m.users).padStart(8)}` +\n      `${String(m.requests).padStart(8)}`\
+          \ +\n      `${String(m.errors4xx).padStart(7)}` +\n      `${String(m.errors5xx).padStart(7)}`\
+          \ +\n      `${m.revenue.toLocaleString('es-PE', { minimumFractionDigits:\
+          \ 2 }).padStart(15)}`,\n    );\n  });\n\n  console.log('\\n── Payload MINT\
+          \ ────────────────────────────────────────────────────────────────');\n\
+          \  console.log(mintPayload);\n  console.log('────────────────────────────────────────────────────────────────────────────────\\\
+          n');\n\n  try {\n    const response = await metricsClient.ingest({ body:\
+          \ mintPayload });\n    console.log('✅ Ingesta exitosa:', response);\n  \
+          \  return response;\n  } catch (error) {\n    console.error('❌ Error en\
+          \ la ingesta:', error);\n    throw error;\n  }\n}\n\n/**\n * Ingesta todas\
+          \ las métricas de una sola aplicación.\n */\nasync function ingestSingleApp(appId)\
+          \ {\n  const appConfig = applications.find((a) => a.app === appId);\n\n\
+          \  if (!appConfig) {\n    console.error(`❌ Aplicación no encontrada: \"\
+          ${appId}\"`);\n    return;\n  }\n\n  const { lines, metrics: m } = buildAllMintLines(appConfig);\n\
+          \  const { icon, label }       = getSeverity(m.availability);\n\n  console.log(`\\\
+          n\U0001F4E1 Ingesta individual — ${appConfig.name}`);\n  console.log(` \
+          \  Estado        : ${icon} ${label}  (fuente: ${m.source})`);\n  console.log(`\
+          \   Availability  : ${m.availability} %`);\n  console.log(`   Users    \
+          \     : ${m.users}`);\n  console.log(`   Requests/min  : ${m.requests}`);\n\
+          \  console.log(`   Errors 4xx    : ${m.errors4xx}`);\n  console.log(`  \
+          \ Errors 5xx    : ${m.errors5xx}`);\n  console.log(`   Revenue       : S/\
+          \ ${m.revenue.toLocaleString('es-PE', { minimumFractionDigits: 2 })}`);\n\
+          \  console.log(`   Payload:`);\n  lines.forEach((l) => console.log(`   \
+          \  ${l}`));\n  console.log('');\n\n  try {\n    const response = await metricsClient.ingest({\
+          \ body: lines.join('\\n') });\n    console.log(`✅ [${appConfig.name}] Ingesta\
+          \ exitosa:`, response);\n    return response;\n  } catch (error) {\n   \
+          \ console.error(`❌ [${appConfig.name}] Error:`, error);\n    throw error;\n\
+          \  }\n}\n\n// ── Ejecución principal ───────────────────────────────────────────────────────\n\
+          \n// Ingesta completa — todas las métricas, todos los canales\ningestAllMetrics();\n\
+          \n// ── Ejemplos de disrupción (descomentar según necesidad) ──────────────────────\n\
+          \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
+          \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
+          \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
+          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
+          \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
+          \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          // ingestAllMetrics();\n\n// 4. Ver disrupciones activas\n// listActiveDisruptions();\n\
+          \n// 5. Limpiar una disrupción específica\n// clearDisruption(['core-pagos-api']);\n\
+          // ingestAllMetrics();\n\n// 6. Limpiar todas las disrupciones\n// clearDisruption();\n\
+          // ingestAllMetrics();\n\n// 7. Ingesta individual de una sola app\n// ingestSingleApp('plataforma-creditos');"
+      action: dynatrace.automations:run-javascript
+      position:
+        x: 0
+        y: 1
+      description: Run custom JavaScript code.
+      predecessors: []
+    run_javascript_2:
+      name: run_javascript_2
+      input:
+        script: "import { metricsClient } from '@dynatrace-sdk/client-classic-environment-v2';\n\
+          \n/**\n * ════════════════════════════════════════════════════════════════════════════\n\
+          \ *  Ingesta de métricas — Canales Digitales Financieros\n *  Formato: MINT\
+          \  →  <metricKey>,<dimensions> <value>\n *\n *  Métricas ingestadas (todas\
+          \ correlacionadas entre sí):\n *    · app.availability          → % disponibilidad\
+          \ del servicio\n *    · app.users.connected       → usuarios activos en\
+          \ sesión\n *    · app.requests              → total de requests por minuto\
+          \ (RPM)\n *    · app.request.errors        → errores HTTP 4xx y 5xx (derivados\
+          \ del RPM)\n *    · app.transactions.revenue  → ingresos por transacciones\
+          \ (S/ por minuto)\n *\n *  Lógica de coherencia:\n *    - Todos los valores\
+          \ se derivan del estado de disponibilidad (availability).\n *    - A menor\
+          \ disponibilidad → menos usuarios → menos requests → más errores\n *   \
+          \   → menos revenue. Los números siempre cuentan la misma historia.\n *\
+          \ ════════════════════════════════════════════════════════════════════════════\n\
+          \ */\n\n// ── Catálogo de aplicaciones ──────────────────────────────────────────────────\n\
+          \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
+          \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
+          \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
+          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
+          \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
+          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
+          \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
+          \ 3200.00,\n  },\n  {\n    app: 'onboarding-digital',  name: 'Onboarding\
+          \ Digital',\n    environment: 'produccion',  canal: 'web',\n    baseUsers:\
+          \ 2400,   baseRpm: 1800,  revenuePerTx: 0.00,\n  },\n  {\n    app: 'core-pagos-api',\
+          \      name: 'Core Pagos API',\n    environment: 'produccion',  canal: 'api',\n\
+          \    baseUsers: 0,      baseRpm: 22000, revenuePerTx: 85.00,\n  },\n  {\n\
+          \    app: 'cajero-virtual-atm',  name: 'Cajero Virtual ATM',\n    environment:\
+          \ 'produccion',  canal: 'atm',\n    baseUsers: 5500,   baseRpm: 3800,  revenuePerTx:\
+          \ 0.00,\n  },\n  {\n    app: 'app-seguros-vida',    name: 'App Seguros de\
+          \ Vida',\n    environment: 'produccion',  canal: 'mobile',\n    baseUsers:\
+          \ 4200,   baseRpm: 2900,  revenuePerTx: 620.00,\n  },\n  {\n    app: 'plataforma-creditos',\
+          \ name: 'Plataforma de Créditos',\n    environment: 'produccion',  canal:\
+          \ 'web',\n    baseUsers: 6800,   baseRpm: 5100,  revenuePerTx: 1400.00,\n\
+          \  },\n];\n\n// ── Rangos de disponibilidad ──────────────────────────────────────────────────\n\
+          \nconst RANGES = {\n  STABLE:   { min: 90,  max: 100 },   // operación normal\n\
+          \  DEGRADED: { min: 80,  max: 89  },   // servicio degradado\n  OUTAGE:\
+          \   { min: 0,   max: 79  },   // caída crítica\n};\n\n/**\n * Pesos para\
+          \ modo estable (operación habitual):\n *   96 % → STABLE · 3 % → DEGRADED\
+          \ · 1 % → OUTAGE\n */\nconst STABLE_WEIGHTS = { STABLE: 0.96, DEGRADED:\
+          \ 0.03, OUTAGE: 0.01 };\n\n// ── Estado de disrupción activa ───────────────────────────────────────────────\n\
+          \n/**\n * Map<appId, { type: 'OUTAGE'|'DEGRADED', expiresAt: number|null\
+          \ }>\n * expiresAt = null  →  indefinida hasta clearDisruption()\n * expiresAt\
+          \ = ms    →  auto-limpieza al vencer\n */\nconst activeDisruptions = new\
+          \ Map();\n\n// ── Utilidades ────────────────────────────────────────────────────────────────\n\
+          \n/** Número aleatorio con N decimales en [min, max]. */\nfunction randomInRange(min,\
+          \ max, decimals = 2) {\n  return parseFloat((Math.random() * (max - min)\
+          \ + min).toFixed(decimals));\n}\n\n/** Ruido gaussiano suave (±sigma) sobre\
+          \ un valor base. */\nfunction jitter(base, sigma) {\n  // Box-Muller simplificado\n\
+          \  const u = 1 - Math.random();\n  const v = Math.random();\n  const z =\
+          \ Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);\n  return Math.max(0,\
+          \ base + z * sigma);\n}\n\n/** Clasifica la disponibilidad y retorna etiqueta,\
+          \ icono y tag MINT. */\nfunction getSeverity(availability) {\n  if (availability\
+          \ <= 15) return { label: 'OUTAGE',   icon: '\U0001F534', tag: 'outage' \
+          \  };\n  if (availability <= 79) return { label: 'DEGRADED', icon: '\U0001F7E1\
+          ', tag: 'degraded' };\n  return                         { label: 'STABLE',\
+          \   icon: '\U0001F7E2', tag: 'stable'   };\n}\n\n/** Elige rango ponderado\
+          \ para modo estable. */\nfunction pickStableRange() {\n  const r = Math.random();\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE)                             return 'OUTAGE';\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE + STABLE_WEIGHTS.DEGRADED)  return 'DEGRADED';\n\
+          \  return 'STABLE';\n}\n\n// ── Generación de disponibilidad (con soporte\
+          \ de disrupción) ──────────────────\n\nfunction resolveAvailability(appId)\
+          \ {\n  // Auto-limpiar disrupción vencida\n  const dis = activeDisruptions.get(appId);\n\
+          \  if (dis && dis.expiresAt !== null && Date.now() > dis.expiresAt) {\n\
+          \    activeDisruptions.delete(appId);\n    console.log(`  ⏱  Disrupción\
+          \ vencida y limpiada: ${appId}`);\n  }\n\n  const active = activeDisruptions.get(appId);\n\
+          \  if (active) {\n    const { min, max } = RANGES[active.type];\n    return\
+          \ { availability: randomInRange(min, max), source: `DISRUPTION:${active.type}`\
+          \ };\n  }\n\n  const rangeName   = pickStableRange();\n  const { min, max\
+          \ } = RANGES[rangeName];\n  return { availability: randomInRange(min, max),\
+          \ source: `STABLE_MODE:${rangeName}` };\n}\n\n// ── Motor de métricas coherentes\
+          \ ─────────────────────────────────────────────\n\n/**\n * Genera el conjunto\
+          \ completo de métricas para una aplicación.\n *\n * Relaciones de coherencia:\n\
+          \ *\n *  healthFactor = availability / 100\n *\n *  users    = baseUsers\
+          \  × healthFactor  (± ruido 3 %)\n *  requests = baseRpm    × healthFactor\
+          \  (± ruido 2 %)\n *\n *  Tasa de error base:\n *    STABLE   →  0.5 – 2\
+          \ %  de requests totales (casi todo 2xx)\n *    DEGRADED →  5 – 15 %   de\
+          \ requests totales\n *    OUTAGE   → 40 – 80 %   de requests totales\n *\n\
+          \ *  Distribución de errores:\n *    4xx (errores de cliente / autenticación)\
+          \ ≈ 30 % de los errores\n *    5xx (errores de servidor / timeout)     \
+          \ ≈ 70 % de los errores\n *    → En un outage predominan los 5xx (servidor\
+          \ caído).\n *\n *  revenue  = requests exitosos × (revenuePerTx × randomFactor)\n\
+          \ *    → Solo las transacciones sin error generan ingreso.\n */\nfunction\
+          \ generateAppMetrics(app) {\n  const { availability, source } = resolveAvailability(app.app);\n\
+          \  const { tag }                  = getSeverity(availability);\n  const\
+          \ healthFactor             = availability / 100;\n\n  // ── Usuarios conectados\
+          \ ───────────────────────────────────────────────────\n  const users = app.baseUsers\
+          \ > 0\n    ? Math.round(jitter(app.baseUsers * healthFactor, app.baseUsers\
+          \ * 0.03))\n    : 0;\n\n  // ── Requests por minuto ───────────────────────────────────────────────────\n\
+          \  const requests = Math.round(jitter(app.baseRpm * healthFactor, app.baseRpm\
+          \ * 0.02));\n\n  // ── Tasa de error según severidad ────────────────────────────────────────\n\
+          \  let errorRateMin, errorRateMax;\n  if (tag === 'outage') {\n    errorRateMin\
+          \ = 0.40; errorRateMax = 0.80;\n  } else if (tag === 'degraded') {\n   \
+          \ errorRateMin = 0.05; errorRateMax = 0.15;\n  } else {\n    errorRateMin\
+          \ = 0.005; errorRateMax = 0.02;\n  }\n  const errorRate   = randomInRange(errorRateMin,\
+          \ errorRateMax, 4);\n  const totalErrors = Math.round(requests * errorRate);\n\
+          \n  // ── Distribución 4xx / 5xx ────────────────────────────────────────────────\n\
+          \  // En outage: más 5xx (servidor); en degradado: más 4xx (timeouts de\
+          \ auth)\n  const ratio5xx    = tag === 'outage' ? randomInRange(0.65, 0.85,\
+          \ 2)\n                    : tag === 'degraded' ? randomInRange(0.50, 0.70,\
+          \ 2)\n                    : randomInRange(0.30, 0.50, 2);\n  const errors5xx\
+          \   = Math.round(totalErrors * ratio5xx);\n  const errors4xx   = totalErrors\
+          \ - errors5xx;\n\n  // ── Revenue ───────────────────────────────────────────────────────────────\n\
+          \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
+          \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
+          \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
+          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
+          \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
+          \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
+          \ * Todas comparten las mismas dimensiones para que sean fácilmente joinables\
+          \ en DQL.\n */\nfunction buildAllMintLines(appConfig) {\n  const m   = generateAppMetrics(appConfig);\n\
+          \  const dim = `app=${appConfig.app},environment=${appConfig.environment},canal=${appConfig.canal},status=${m.tag}`;\n\
+          \n  const lines = [\n    `app.availability,${dim} ${m.availability}`,\n\
+          \    `app.users.connected,${dim} ${m.users}`,\n    `app.requests,${dim}\
+          \ ${m.requests}`,\n    `app.request.errors,${dim},http_status=4xx ${m.errors4xx}`,\n\
+          \    `app.request.errors,${dim},http_status=5xx ${m.errors5xx}`,\n    `app.transactions.revenue,${dim}\
+          \ ${m.revenue}`,\n  ];\n\n  return { lines, metrics: m, appConfig };\n}\n\
+          \n// ── API de disrupción ─────────────────────────────────────────────────────────\n\
+          \n/**\n * simulateDisruption({ apps, type, durationMs })\n *\n * Activa\
+          \ una disrupción a demanda. Afecta TODAS las métricas de forma\n * coherente:\
+          \ menos disponibilidad → menos usuarios → más errores → menos revenue.\n\
+          \ *\n * @param {string[]} options.apps       IDs afectados, o ['ALL'] para\
+          \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
+          \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
+          \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
+          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
+          \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
+          \ = null } = {}) {\n  if (!['OUTAGE', 'DEGRADED'].includes(type)) {\n  \
+          \  console.error(`❌ Tipo inválido \"${type}\". Usar 'OUTAGE' o 'DEGRADED'.`);\n\
+          \    return;\n  }\n\n  const targets = apps.includes('ALL')\n    ? applications.map((a)\
+          \ => a.app)\n    : apps.filter((id) => {\n        const found = applications.find((a)\
+          \ => a.app === id);\n        if (!found) console.warn(`  ⚠️  App no encontrada:\
+          \ \"${id}\" — omitida.`);\n        return !!found;\n      });\n\n  if (targets.length\
+          \ === 0) {\n    console.error('❌ simulateDisruption: no se encontraron apps\
+          \ válidas.');\n    return;\n  }\n\n  const expiresAt = durationMs !== null\
+          \ ? Date.now() + durationMs : null;\n  const expLabel  = expiresAt ? `expira\
+          \ en ${(durationMs / 1000).toFixed(0)}s` : 'indefinida';\n\n  targets.forEach((id)\
+          \ => activeDisruptions.set(id, { type, expiresAt }));\n\n  console.log('');\n\
+          \  console.log('╔════════════════════════════════════════════════════════╗');\n\
+          \  console.log(`║  \U0001F6A8 DISRUPCIÓN ACTIVADA — ${type.padEnd(28)}║`);\n\
+          \  console.log('╚════════════════════════════════════════════════════════╝');\n\
+          \  console.log(`  Tipo      : ${type}`);\n  console.log(`  Duración  : ${expLabel}`);\n\
+          \  console.log(`  Rango     : ${RANGES[type].min} – ${RANGES[type].max}\
+          \ %`);\n  console.log(`  Apps      : ${targets.join(', ')}`);\n  console.log('\
+          \  Impacto   : availability ↓  →  users ↓  →  errors ↑  →  revenue ↓');\n\
+          \  console.log('');\n}\n\n/**\n * clearDisruption(apps?)\n * Restaura el\
+          \ modo estable. Sin args limpia todas.\n *\n * @example  clearDisruption(['core-pagos-api']);\n\
+          \ * @example  clearDisruption();\n */\nfunction clearDisruption(apps) {\n\
+          \  const targets = apps ? apps : [...activeDisruptions.keys()];\n\n  if\
+          \ (targets.length === 0) {\n    console.log('ℹ️  No hay disrupciones activas\
+          \ para limpiar.');\n    return;\n  }\n\n  targets.forEach((id) => activeDisruptions.delete(id));\n\
+          \n  console.log('');\n  console.log('✅ Disrupciones limpiadas — retorno\
+          \ a modo ESTABLE:');\n  console.log(`   ${targets.join(', ')}`);\n  console.log('');\n\
+          }\n\n/** Muestra un resumen de las disrupciones activas. */\nfunction listActiveDisruptions()\
+          \ {\n  if (activeDisruptions.size === 0) {\n    console.log('ℹ️  No hay\
+          \ disrupciones activas.');\n    return;\n  }\n  console.log('\\n── Disrupciones\
+          \ activas ────────────────────────────────────');\n  activeDisruptions.forEach(({\
+          \ type, expiresAt }, appId) => {\n    const remaining = expiresAt\n    \
+          \  ? `${Math.max(0, Math.round((expiresAt - Date.now()) / 1000))}s restantes`\n\
+          \      : 'indefinida';\n    console.log(`  \U0001F6A8 ${appId.padEnd(25)}\
+          \  ${type.padEnd(9)}  [${remaining}]`);\n  });\n  console.log('');\n}\n\n\
+          // ── Funciones de ingesta ──────────────────────────────────────────────────────\n\
+          \n/**\n * Ingesta todas las métricas de todas las apps en una sola llamada\
+          \ MINT.\n */\nasync function ingestAllMetrics() {\n  const results     =\
+          \ applications.map(buildAllMintLines);\n  const mintPayload = results.flatMap((r)\
+          \ => r.lines).join('\\n');\n\n  // ── Log de consola coherente ────────────────────────────────────────────\n\
+          \  console.log('╔══════════════════════════════════════════════════════════════════════════════╗');\n\
+          \  console.log('║  Ingesta de métricas — Canales Digitales Financieros \
+          \                       ║');\n  console.log('╚══════════════════════════════════════════════════════════════════════════════╝');\n\
+          \  console.log(\n    '  App'.padEnd(28) +\n    'Status'.padEnd(11) +\n \
+          \   'Avail'.padStart(7) +\n    'Users'.padStart(8) +\n    'RPM'.padStart(8)\
+          \ +\n    '4xx'.padStart(7) +\n    '5xx'.padStart(7) +\n    'Revenue (S/)'.padStart(15),\n\
+          \  );\n  console.log('  ' + '─'.repeat(88));\n\n  results.forEach(({ metrics:\
+          \ m, appConfig }) => {\n    const { icon, label } = getSeverity(m.availability);\n\
+          \    console.log(\n      `  ${icon} ${appConfig.app.padEnd(25)}` +\n   \
+          \   `${label.padEnd(9)}  ` +\n      `${String(m.availability).padStart(6)}%`\
+          \ +\n      `${String(m.users).padStart(8)}` +\n      `${String(m.requests).padStart(8)}`\
+          \ +\n      `${String(m.errors4xx).padStart(7)}` +\n      `${String(m.errors5xx).padStart(7)}`\
+          \ +\n      `${m.revenue.toLocaleString('es-PE', { minimumFractionDigits:\
+          \ 2 }).padStart(15)}`,\n    );\n  });\n\n  console.log('\\n── Payload MINT\
+          \ ────────────────────────────────────────────────────────────────');\n\
+          \  console.log(mintPayload);\n  console.log('────────────────────────────────────────────────────────────────────────────────\\\
+          n');\n\n  try {\n    const response = await metricsClient.ingest({ body:\
+          \ mintPayload });\n    console.log('✅ Ingesta exitosa:', response);\n  \
+          \  return response;\n  } catch (error) {\n    console.error('❌ Error en\
+          \ la ingesta:', error);\n    throw error;\n  }\n}\n\n/**\n * Ingesta todas\
+          \ las métricas de una sola aplicación.\n */\nasync function ingestSingleApp(appId)\
+          \ {\n  const appConfig = applications.find((a) => a.app === appId);\n\n\
+          \  if (!appConfig) {\n    console.error(`❌ Aplicación no encontrada: \"\
+          ${appId}\"`);\n    return;\n  }\n\n  const { lines, metrics: m } = buildAllMintLines(appConfig);\n\
+          \  const { icon, label }       = getSeverity(m.availability);\n\n  console.log(`\\\
+          n\U0001F4E1 Ingesta individual — ${appConfig.name}`);\n  console.log(` \
+          \  Estado        : ${icon} ${label}  (fuente: ${m.source})`);\n  console.log(`\
+          \   Availability  : ${m.availability} %`);\n  console.log(`   Users    \
+          \     : ${m.users}`);\n  console.log(`   Requests/min  : ${m.requests}`);\n\
+          \  console.log(`   Errors 4xx    : ${m.errors4xx}`);\n  console.log(`  \
+          \ Errors 5xx    : ${m.errors5xx}`);\n  console.log(`   Revenue       : S/\
+          \ ${m.revenue.toLocaleString('es-PE', { minimumFractionDigits: 2 })}`);\n\
+          \  console.log(`   Payload:`);\n  lines.forEach((l) => console.log(`   \
+          \  ${l}`));\n  console.log('');\n\n  try {\n    const response = await metricsClient.ingest({\
+          \ body: lines.join('\\n') });\n    console.log(`✅ [${appConfig.name}] Ingesta\
+          \ exitosa:`, response);\n    return response;\n  } catch (error) {\n   \
+          \ console.error(`❌ [${appConfig.name}] Error:`, error);\n    throw error;\n\
+          \  }\n}\n\n// ── Ejecución principal ───────────────────────────────────────────────────────\n\
+          \n// Ingesta completa — todas las métricas, todos los canales\ningestAllMetrics();\n\
+          \n// ── Ejemplos de disrupción (descomentar según necesidad) ──────────────────────\n\
+          \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
+          \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
+          \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
+          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
+          \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
+          \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          // ingestAllMetrics();\n\n// 4. Ver disrupciones activas\n// listActiveDisruptions();\n\
+          \n// 5. Limpiar una disrupción específica\n// clearDisruption(['core-pagos-api']);\n\
+          // ingestAllMetrics();\n\n// 6. Limpiar todas las disrupciones\n// clearDisruption();\n\
+          // ingestAllMetrics();\n\n// 7. Ingesta individual de una sola app\n// ingestSingleApp('plataforma-creditos');"
+      action: dynatrace.automations:run-javascript
+      position:
+        x: -1
+        y: 1
+      description: Run custom JavaScript code.
+      predecessors: []
+    run_javascript_3:
+      name: run_javascript_3
+      input:
+        script: "import { metricsClient } from '@dynatrace-sdk/client-classic-environment-v2';\n\
+          \n/**\n * ════════════════════════════════════════════════════════════════════════════\n\
+          \ *  Ingesta de métricas — Canales Digitales Financieros\n *  Formato: MINT\
+          \  →  <metricKey>,<dimensions> <value>\n *\n *  Métricas ingestadas (todas\
+          \ correlacionadas entre sí):\n *    · app.availability          → % disponibilidad\
+          \ del servicio\n *    · app.users.connected       → usuarios activos en\
+          \ sesión\n *    · app.requests              → total de requests por minuto\
+          \ (RPM)\n *    · app.request.errors        → errores HTTP 4xx y 5xx (derivados\
+          \ del RPM)\n *    · app.transactions.revenue  → ingresos por transacciones\
+          \ (S/ por minuto)\n *\n *  Lógica de coherencia:\n *    - Todos los valores\
+          \ se derivan del estado de disponibilidad (availability).\n *    - A menor\
+          \ disponibilidad → menos usuarios → menos requests → más errores\n *   \
+          \   → menos revenue. Los números siempre cuentan la misma historia.\n *\
+          \ ════════════════════════════════════════════════════════════════════════════\n\
+          \ */\n\n// ── Catálogo de aplicaciones ──────────────────────────────────────────────────\n\
+          \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
+          \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
+          \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
+          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
+          \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
+          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
+          \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
+          \ 3200.00,\n  },\n  {\n    app: 'onboarding-digital',  name: 'Onboarding\
+          \ Digital',\n    environment: 'produccion',  canal: 'web',\n    baseUsers:\
+          \ 2400,   baseRpm: 1800,  revenuePerTx: 0.00,\n  },\n  {\n    app: 'core-pagos-api',\
+          \      name: 'Core Pagos API',\n    environment: 'produccion',  canal: 'api',\n\
+          \    baseUsers: 0,      baseRpm: 22000, revenuePerTx: 85.00,\n  },\n  {\n\
+          \    app: 'cajero-virtual-atm',  name: 'Cajero Virtual ATM',\n    environment:\
+          \ 'produccion',  canal: 'atm',\n    baseUsers: 5500,   baseRpm: 3800,  revenuePerTx:\
+          \ 0.00,\n  },\n  {\n    app: 'app-seguros-vida',    name: 'App Seguros de\
+          \ Vida',\n    environment: 'produccion',  canal: 'mobile',\n    baseUsers:\
+          \ 4200,   baseRpm: 2900,  revenuePerTx: 620.00,\n  },\n  {\n    app: 'plataforma-creditos',\
+          \ name: 'Plataforma de Créditos',\n    environment: 'produccion',  canal:\
+          \ 'web',\n    baseUsers: 6800,   baseRpm: 5100,  revenuePerTx: 1400.00,\n\
+          \  },\n];\n\n// ── Rangos de disponibilidad ──────────────────────────────────────────────────\n\
+          \nconst RANGES = {\n  STABLE:   { min: 90,  max: 100 },   // operación normal\n\
+          \  DEGRADED: { min: 80,  max: 89  },   // servicio degradado\n  OUTAGE:\
+          \   { min: 0,   max: 79  },   // caída crítica\n};\n\n/**\n * Pesos para\
+          \ modo estable (operación habitual):\n *   96 % → STABLE · 3 % → DEGRADED\
+          \ · 1 % → OUTAGE\n */\nconst STABLE_WEIGHTS = { STABLE: 0.96, DEGRADED:\
+          \ 0.03, OUTAGE: 0.01 };\n\n// ── Estado de disrupción activa ───────────────────────────────────────────────\n\
+          \n/**\n * Map<appId, { type: 'OUTAGE'|'DEGRADED', expiresAt: number|null\
+          \ }>\n * expiresAt = null  →  indefinida hasta clearDisruption()\n * expiresAt\
+          \ = ms    →  auto-limpieza al vencer\n */\nconst activeDisruptions = new\
+          \ Map();\n\n// ── Utilidades ────────────────────────────────────────────────────────────────\n\
+          \n/** Número aleatorio con N decimales en [min, max]. */\nfunction randomInRange(min,\
+          \ max, decimals = 2) {\n  return parseFloat((Math.random() * (max - min)\
+          \ + min).toFixed(decimals));\n}\n\n/** Ruido gaussiano suave (±sigma) sobre\
+          \ un valor base. */\nfunction jitter(base, sigma) {\n  // Box-Muller simplificado\n\
+          \  const u = 1 - Math.random();\n  const v = Math.random();\n  const z =\
+          \ Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);\n  return Math.max(0,\
+          \ base + z * sigma);\n}\n\n/** Clasifica la disponibilidad y retorna etiqueta,\
+          \ icono y tag MINT. */\nfunction getSeverity(availability) {\n  if (availability\
+          \ <= 15) return { label: 'OUTAGE',   icon: '\U0001F534', tag: 'outage' \
+          \  };\n  if (availability <= 79) return { label: 'DEGRADED', icon: '\U0001F7E1\
+          ', tag: 'degraded' };\n  return                         { label: 'STABLE',\
+          \   icon: '\U0001F7E2', tag: 'stable'   };\n}\n\n/** Elige rango ponderado\
+          \ para modo estable. */\nfunction pickStableRange() {\n  const r = Math.random();\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE)                             return 'OUTAGE';\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE + STABLE_WEIGHTS.DEGRADED)  return 'DEGRADED';\n\
+          \  return 'STABLE';\n}\n\n// ── Generación de disponibilidad (con soporte\
+          \ de disrupción) ──────────────────\n\nfunction resolveAvailability(appId)\
+          \ {\n  // Auto-limpiar disrupción vencida\n  const dis = activeDisruptions.get(appId);\n\
+          \  if (dis && dis.expiresAt !== null && Date.now() > dis.expiresAt) {\n\
+          \    activeDisruptions.delete(appId);\n    console.log(`  ⏱  Disrupción\
+          \ vencida y limpiada: ${appId}`);\n  }\n\n  const active = activeDisruptions.get(appId);\n\
+          \  if (active) {\n    const { min, max } = RANGES[active.type];\n    return\
+          \ { availability: randomInRange(min, max), source: `DISRUPTION:${active.type}`\
+          \ };\n  }\n\n  const rangeName   = pickStableRange();\n  const { min, max\
+          \ } = RANGES[rangeName];\n  return { availability: randomInRange(min, max),\
+          \ source: `STABLE_MODE:${rangeName}` };\n}\n\n// ── Motor de métricas coherentes\
+          \ ─────────────────────────────────────────────\n\n/**\n * Genera el conjunto\
+          \ completo de métricas para una aplicación.\n *\n * Relaciones de coherencia:\n\
+          \ *\n *  healthFactor = availability / 100\n *\n *  users    = baseUsers\
+          \  × healthFactor  (± ruido 3 %)\n *  requests = baseRpm    × healthFactor\
+          \  (± ruido 2 %)\n *\n *  Tasa de error base:\n *    STABLE   →  0.5 – 2\
+          \ %  de requests totales (casi todo 2xx)\n *    DEGRADED →  5 – 15 %   de\
+          \ requests totales\n *    OUTAGE   → 40 – 80 %   de requests totales\n *\n\
+          \ *  Distribución de errores:\n *    4xx (errores de cliente / autenticación)\
+          \ ≈ 30 % de los errores\n *    5xx (errores de servidor / timeout)     \
+          \ ≈ 70 % de los errores\n *    → En un outage predominan los 5xx (servidor\
+          \ caído).\n *\n *  revenue  = requests exitosos × (revenuePerTx × randomFactor)\n\
+          \ *    → Solo las transacciones sin error generan ingreso.\n */\nfunction\
+          \ generateAppMetrics(app) {\n  const { availability, source } = resolveAvailability(app.app);\n\
+          \  const { tag }                  = getSeverity(availability);\n  const\
+          \ healthFactor             = availability / 100;\n\n  // ── Usuarios conectados\
+          \ ───────────────────────────────────────────────────\n  const users = app.baseUsers\
+          \ > 0\n    ? Math.round(jitter(app.baseUsers * healthFactor, app.baseUsers\
+          \ * 0.03))\n    : 0;\n\n  // ── Requests por minuto ───────────────────────────────────────────────────\n\
+          \  const requests = Math.round(jitter(app.baseRpm * healthFactor, app.baseRpm\
+          \ * 0.02));\n\n  // ── Tasa de error según severidad ────────────────────────────────────────\n\
+          \  let errorRateMin, errorRateMax;\n  if (tag === 'outage') {\n    errorRateMin\
+          \ = 0.40; errorRateMax = 0.80;\n  } else if (tag === 'degraded') {\n   \
+          \ errorRateMin = 0.05; errorRateMax = 0.15;\n  } else {\n    errorRateMin\
+          \ = 0.005; errorRateMax = 0.02;\n  }\n  const errorRate   = randomInRange(errorRateMin,\
+          \ errorRateMax, 4);\n  const totalErrors = Math.round(requests * errorRate);\n\
+          \n  // ── Distribución 4xx / 5xx ────────────────────────────────────────────────\n\
+          \  // En outage: más 5xx (servidor); en degradado: más 4xx (timeouts de\
+          \ auth)\n  const ratio5xx    = tag === 'outage' ? randomInRange(0.65, 0.85,\
+          \ 2)\n                    : tag === 'degraded' ? randomInRange(0.50, 0.70,\
+          \ 2)\n                    : randomInRange(0.30, 0.50, 2);\n  const errors5xx\
+          \   = Math.round(totalErrors * ratio5xx);\n  const errors4xx   = totalErrors\
+          \ - errors5xx;\n\n  // ── Revenue ───────────────────────────────────────────────────────────────\n\
+          \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
+          \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
+          \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
+          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
+          \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
+          \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
+          \ * Todas comparten las mismas dimensiones para que sean fácilmente joinables\
+          \ en DQL.\n */\nfunction buildAllMintLines(appConfig) {\n  const m   = generateAppMetrics(appConfig);\n\
+          \  const dim = `app=${appConfig.app},environment=${appConfig.environment},canal=${appConfig.canal},status=${m.tag}`;\n\
+          \n  const lines = [\n    `app.availability,${dim} ${m.availability}`,\n\
+          \    `app.users.connected,${dim} ${m.users}`,\n    `app.requests,${dim}\
+          \ ${m.requests}`,\n    `app.request.errors,${dim},http_status=4xx ${m.errors4xx}`,\n\
+          \    `app.request.errors,${dim},http_status=5xx ${m.errors5xx}`,\n    `app.transactions.revenue,${dim}\
+          \ ${m.revenue}`,\n  ];\n\n  return { lines, metrics: m, appConfig };\n}\n\
+          \n// ── API de disrupción ─────────────────────────────────────────────────────────\n\
+          \n/**\n * simulateDisruption({ apps, type, durationMs })\n *\n * Activa\
+          \ una disrupción a demanda. Afecta TODAS las métricas de forma\n * coherente:\
+          \ menos disponibilidad → menos usuarios → más errores → menos revenue.\n\
+          \ *\n * @param {string[]} options.apps       IDs afectados, o ['ALL'] para\
+          \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
+          \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
+          \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
+          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
+          \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
+          \ = null } = {}) {\n  if (!['OUTAGE', 'DEGRADED'].includes(type)) {\n  \
+          \  console.error(`❌ Tipo inválido \"${type}\". Usar 'OUTAGE' o 'DEGRADED'.`);\n\
+          \    return;\n  }\n\n  const targets = apps.includes('ALL')\n    ? applications.map((a)\
+          \ => a.app)\n    : apps.filter((id) => {\n        const found = applications.find((a)\
+          \ => a.app === id);\n        if (!found) console.warn(`  ⚠️  App no encontrada:\
+          \ \"${id}\" — omitida.`);\n        return !!found;\n      });\n\n  if (targets.length\
+          \ === 0) {\n    console.error('❌ simulateDisruption: no se encontraron apps\
+          \ válidas.');\n    return;\n  }\n\n  const expiresAt = durationMs !== null\
+          \ ? Date.now() + durationMs : null;\n  const expLabel  = expiresAt ? `expira\
+          \ en ${(durationMs / 1000).toFixed(0)}s` : 'indefinida';\n\n  targets.forEach((id)\
+          \ => activeDisruptions.set(id, { type, expiresAt }));\n\n  console.log('');\n\
+          \  console.log('╔════════════════════════════════════════════════════════╗');\n\
+          \  console.log(`║  \U0001F6A8 DISRUPCIÓN ACTIVADA — ${type.padEnd(28)}║`);\n\
+          \  console.log('╚════════════════════════════════════════════════════════╝');\n\
+          \  console.log(`  Tipo      : ${type}`);\n  console.log(`  Duración  : ${expLabel}`);\n\
+          \  console.log(`  Rango     : ${RANGES[type].min} – ${RANGES[type].max}\
+          \ %`);\n  console.log(`  Apps      : ${targets.join(', ')}`);\n  console.log('\
+          \  Impacto   : availability ↓  →  users ↓  →  errors ↑  →  revenue ↓');\n\
+          \  console.log('');\n}\n\n/**\n * clearDisruption(apps?)\n * Restaura el\
+          \ modo estable. Sin args limpia todas.\n *\n * @example  clearDisruption(['core-pagos-api']);\n\
+          \ * @example  clearDisruption();\n */\nfunction clearDisruption(apps) {\n\
+          \  const targets = apps ? apps : [...activeDisruptions.keys()];\n\n  if\
+          \ (targets.length === 0) {\n    console.log('ℹ️  No hay disrupciones activas\
+          \ para limpiar.');\n    return;\n  }\n\n  targets.forEach((id) => activeDisruptions.delete(id));\n\
+          \n  console.log('');\n  console.log('✅ Disrupciones limpiadas — retorno\
+          \ a modo ESTABLE:');\n  console.log(`   ${targets.join(', ')}`);\n  console.log('');\n\
+          }\n\n/** Muestra un resumen de las disrupciones activas. */\nfunction listActiveDisruptions()\
+          \ {\n  if (activeDisruptions.size === 0) {\n    console.log('ℹ️  No hay\
+          \ disrupciones activas.');\n    return;\n  }\n  console.log('\\n── Disrupciones\
+          \ activas ────────────────────────────────────');\n  activeDisruptions.forEach(({\
+          \ type, expiresAt }, appId) => {\n    const remaining = expiresAt\n    \
+          \  ? `${Math.max(0, Math.round((expiresAt - Date.now()) / 1000))}s restantes`\n\
+          \      : 'indefinida';\n    console.log(`  \U0001F6A8 ${appId.padEnd(25)}\
+          \  ${type.padEnd(9)}  [${remaining}]`);\n  });\n  console.log('');\n}\n\n\
+          // ── Funciones de ingesta ──────────────────────────────────────────────────────\n\
+          \n/**\n * Ingesta todas las métricas de todas las apps en una sola llamada\
+          \ MINT.\n */\nasync function ingestAllMetrics() {\n  const results     =\
+          \ applications.map(buildAllMintLines);\n  const mintPayload = results.flatMap((r)\
+          \ => r.lines).join('\\n');\n\n  // ── Log de consola coherente ────────────────────────────────────────────\n\
+          \  console.log('╔══════════════════════════════════════════════════════════════════════════════╗');\n\
+          \  console.log('║  Ingesta de métricas — Canales Digitales Financieros \
+          \                       ║');\n  console.log('╚══════════════════════════════════════════════════════════════════════════════╝');\n\
+          \  console.log(\n    '  App'.padEnd(28) +\n    'Status'.padEnd(11) +\n \
+          \   'Avail'.padStart(7) +\n    'Users'.padStart(8) +\n    'RPM'.padStart(8)\
+          \ +\n    '4xx'.padStart(7) +\n    '5xx'.padStart(7) +\n    'Revenue (S/)'.padStart(15),\n\
+          \  );\n  console.log('  ' + '─'.repeat(88));\n\n  results.forEach(({ metrics:\
+          \ m, appConfig }) => {\n    const { icon, label } = getSeverity(m.availability);\n\
+          \    console.log(\n      `  ${icon} ${appConfig.app.padEnd(25)}` +\n   \
+          \   `${label.padEnd(9)}  ` +\n      `${String(m.availability).padStart(6)}%`\
+          \ +\n      `${String(m.users).padStart(8)}` +\n      `${String(m.requests).padStart(8)}`\
+          \ +\n      `${String(m.errors4xx).padStart(7)}` +\n      `${String(m.errors5xx).padStart(7)}`\
+          \ +\n      `${m.revenue.toLocaleString('es-PE', { minimumFractionDigits:\
+          \ 2 }).padStart(15)}`,\n    );\n  });\n\n  console.log('\\n── Payload MINT\
+          \ ────────────────────────────────────────────────────────────────');\n\
+          \  console.log(mintPayload);\n  console.log('────────────────────────────────────────────────────────────────────────────────\\\
+          n');\n\n  try {\n    const response = await metricsClient.ingest({ body:\
+          \ mintPayload });\n    console.log('✅ Ingesta exitosa:', response);\n  \
+          \  return response;\n  } catch (error) {\n    console.error('❌ Error en\
+          \ la ingesta:', error);\n    throw error;\n  }\n}\n\n/**\n * Ingesta todas\
+          \ las métricas de una sola aplicación.\n */\nasync function ingestSingleApp(appId)\
+          \ {\n  const appConfig = applications.find((a) => a.app === appId);\n\n\
+          \  if (!appConfig) {\n    console.error(`❌ Aplicación no encontrada: \"\
+          ${appId}\"`);\n    return;\n  }\n\n  const { lines, metrics: m } = buildAllMintLines(appConfig);\n\
+          \  const { icon, label }       = getSeverity(m.availability);\n\n  console.log(`\\\
+          n\U0001F4E1 Ingesta individual — ${appConfig.name}`);\n  console.log(` \
+          \  Estado        : ${icon} ${label}  (fuente: ${m.source})`);\n  console.log(`\
+          \   Availability  : ${m.availability} %`);\n  console.log(`   Users    \
+          \     : ${m.users}`);\n  console.log(`   Requests/min  : ${m.requests}`);\n\
+          \  console.log(`   Errors 4xx    : ${m.errors4xx}`);\n  console.log(`  \
+          \ Errors 5xx    : ${m.errors5xx}`);\n  console.log(`   Revenue       : S/\
+          \ ${m.revenue.toLocaleString('es-PE', { minimumFractionDigits: 2 })}`);\n\
+          \  console.log(`   Payload:`);\n  lines.forEach((l) => console.log(`   \
+          \  ${l}`));\n  console.log('');\n\n  try {\n    const response = await metricsClient.ingest({\
+          \ body: lines.join('\\n') });\n    console.log(`✅ [${appConfig.name}] Ingesta\
+          \ exitosa:`, response);\n    return response;\n  } catch (error) {\n   \
+          \ console.error(`❌ [${appConfig.name}] Error:`, error);\n    throw error;\n\
+          \  }\n}\n\n// ── Ejecución principal ───────────────────────────────────────────────────────\n\
+          \n// Ingesta completa — todas las métricas, todos los canales\ningestAllMetrics();\n\
+          \n// ── Ejemplos de disrupción (descomentar según necesidad) ──────────────────────\n\
+          \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
+          \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
+          \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
+          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
+          \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
+          \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          // ingestAllMetrics();\n\n// 4. Ver disrupciones activas\n// listActiveDisruptions();\n\
+          \n// 5. Limpiar una disrupción específica\n// clearDisruption(['core-pagos-api']);\n\
+          // ingestAllMetrics();\n\n// 6. Limpiar todas las disrupciones\n// clearDisruption();\n\
+          // ingestAllMetrics();\n\n// 7. Ingesta individual de una sola app\n// ingestSingleApp('plataforma-creditos');"
+      action: dynatrace.automations:run-javascript
+      position:
+        x: 1
+        y: 1
+      description: Run custom JavaScript code.
+      predecessors: []
+    run_javascript_4:
+      name: run_javascript_4
+      input:
+        script: "import { metricsClient } from '@dynatrace-sdk/client-classic-environment-v2';\n\
+          \n/**\n * ════════════════════════════════════════════════════════════════════════════\n\
+          \ *  Ingesta de métricas — Canales Digitales Financieros\n *  Formato: MINT\
+          \  →  <metricKey>,<dimensions> <value>\n *\n *  Métricas ingestadas (todas\
+          \ correlacionadas entre sí):\n *    · app.availability          → % disponibilidad\
+          \ del servicio\n *    · app.users.connected       → usuarios activos en\
+          \ sesión\n *    · app.requests              → total de requests por minuto\
+          \ (RPM)\n *    · app.request.errors        → errores HTTP 4xx y 5xx (derivados\
+          \ del RPM)\n *    · app.transactions.revenue  → ingresos por transacciones\
+          \ (S/ por minuto)\n *\n *  Lógica de coherencia:\n *    - Todos los valores\
+          \ se derivan del estado de disponibilidad (availability).\n *    - A menor\
+          \ disponibilidad → menos usuarios → menos requests → más errores\n *   \
+          \   → menos revenue. Los números siempre cuentan la misma historia.\n *\
+          \ ════════════════════════════════════════════════════════════════════════════\n\
+          \ */\n\n// ── Catálogo de aplicaciones ──────────────────────────────────────────────────\n\
+          \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
+          \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
+          \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
+          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
+          \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
+          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
+          \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
+          \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
+          \ 3200.00,\n  },\n  {\n    app: 'onboarding-digital',  name: 'Onboarding\
+          \ Digital',\n    environment: 'produccion',  canal: 'web',\n    baseUsers:\
+          \ 2400,   baseRpm: 1800,  revenuePerTx: 0.00,\n  },\n  {\n    app: 'core-pagos-api',\
+          \      name: 'Core Pagos API',\n    environment: 'produccion',  canal: 'api',\n\
+          \    baseUsers: 0,      baseRpm: 22000, revenuePerTx: 85.00,\n  },\n  {\n\
+          \    app: 'cajero-virtual-atm',  name: 'Cajero Virtual ATM',\n    environment:\
+          \ 'produccion',  canal: 'atm',\n    baseUsers: 5500,   baseRpm: 3800,  revenuePerTx:\
+          \ 0.00,\n  },\n  {\n    app: 'app-seguros-vida',    name: 'App Seguros de\
+          \ Vida',\n    environment: 'produccion',  canal: 'mobile',\n    baseUsers:\
+          \ 4200,   baseRpm: 2900,  revenuePerTx: 620.00,\n  },\n  {\n    app: 'plataforma-creditos',\
+          \ name: 'Plataforma de Créditos',\n    environment: 'produccion',  canal:\
+          \ 'web',\n    baseUsers: 6800,   baseRpm: 5100,  revenuePerTx: 1400.00,\n\
+          \  },\n];\n\n// ── Rangos de disponibilidad ──────────────────────────────────────────────────\n\
+          \nconst RANGES = {\n  STABLE:   { min: 90,  max: 100 },   // operación normal\n\
+          \  DEGRADED: { min: 80,  max: 89  },   // servicio degradado\n  OUTAGE:\
+          \   { min: 0,   max: 79  },   // caída crítica\n};\n\n/**\n * Pesos para\
+          \ modo estable (operación habitual):\n *   96 % → STABLE · 3 % → DEGRADED\
+          \ · 1 % → OUTAGE\n */\nconst STABLE_WEIGHTS = { STABLE: 0.96, DEGRADED:\
+          \ 0.03, OUTAGE: 0.01 };\n\n// ── Estado de disrupción activa ───────────────────────────────────────────────\n\
+          \n/**\n * Map<appId, { type: 'OUTAGE'|'DEGRADED', expiresAt: number|null\
+          \ }>\n * expiresAt = null  →  indefinida hasta clearDisruption()\n * expiresAt\
+          \ = ms    →  auto-limpieza al vencer\n */\nconst activeDisruptions = new\
+          \ Map();\n\n// ── Utilidades ────────────────────────────────────────────────────────────────\n\
+          \n/** Número aleatorio con N decimales en [min, max]. */\nfunction randomInRange(min,\
+          \ max, decimals = 2) {\n  return parseFloat((Math.random() * (max - min)\
+          \ + min).toFixed(decimals));\n}\n\n/** Ruido gaussiano suave (±sigma) sobre\
+          \ un valor base. */\nfunction jitter(base, sigma) {\n  // Box-Muller simplificado\n\
+          \  const u = 1 - Math.random();\n  const v = Math.random();\n  const z =\
+          \ Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);\n  return Math.max(0,\
+          \ base + z * sigma);\n}\n\n/** Clasifica la disponibilidad y retorna etiqueta,\
+          \ icono y tag MINT. */\nfunction getSeverity(availability) {\n  if (availability\
+          \ <= 15) return { label: 'OUTAGE',   icon: '\U0001F534', tag: 'outage' \
+          \  };\n  if (availability <= 79) return { label: 'DEGRADED', icon: '\U0001F7E1\
+          ', tag: 'degraded' };\n  return                         { label: 'STABLE',\
+          \   icon: '\U0001F7E2', tag: 'stable'   };\n}\n\n/** Elige rango ponderado\
+          \ para modo estable. */\nfunction pickStableRange() {\n  const r = Math.random();\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE)                             return 'OUTAGE';\n\
+          \  if (r < STABLE_WEIGHTS.OUTAGE + STABLE_WEIGHTS.DEGRADED)  return 'DEGRADED';\n\
+          \  return 'STABLE';\n}\n\n// ── Generación de disponibilidad (con soporte\
+          \ de disrupción) ──────────────────\n\nfunction resolveAvailability(appId)\
+          \ {\n  // Auto-limpiar disrupción vencida\n  const dis = activeDisruptions.get(appId);\n\
+          \  if (dis && dis.expiresAt !== null && Date.now() > dis.expiresAt) {\n\
+          \    activeDisruptions.delete(appId);\n    console.log(`  ⏱  Disrupción\
+          \ vencida y limpiada: ${appId}`);\n  }\n\n  const active = activeDisruptions.get(appId);\n\
+          \  if (active) {\n    const { min, max } = RANGES[active.type];\n    return\
+          \ { availability: randomInRange(min, max), source: `DISRUPTION:${active.type}`\
+          \ };\n  }\n\n  const rangeName   = pickStableRange();\n  const { min, max\
+          \ } = RANGES[rangeName];\n  return { availability: randomInRange(min, max),\
+          \ source: `STABLE_MODE:${rangeName}` };\n}\n\n// ── Motor de métricas coherentes\
+          \ ─────────────────────────────────────────────\n\n/**\n * Genera el conjunto\
+          \ completo de métricas para una aplicación.\n *\n * Relaciones de coherencia:\n\
+          \ *\n *  healthFactor = availability / 100\n *\n *  users    = baseUsers\
+          \  × healthFactor  (± ruido 3 %)\n *  requests = baseRpm    × healthFactor\
+          \  (± ruido 2 %)\n *\n *  Tasa de error base:\n *    STABLE   →  0.5 – 2\
+          \ %  de requests totales (casi todo 2xx)\n *    DEGRADED →  5 – 15 %   de\
+          \ requests totales\n *    OUTAGE   → 40 – 80 %   de requests totales\n *\n\
+          \ *  Distribución de errores:\n *    4xx (errores de cliente / autenticación)\
+          \ ≈ 30 % de los errores\n *    5xx (errores de servidor / timeout)     \
+          \ ≈ 70 % de los errores\n *    → En un outage predominan los 5xx (servidor\
+          \ caído).\n *\n *  revenue  = requests exitosos × (revenuePerTx × randomFactor)\n\
+          \ *    → Solo las transacciones sin error generan ingreso.\n */\nfunction\
+          \ generateAppMetrics(app) {\n  const { availability, source } = resolveAvailability(app.app);\n\
+          \  const { tag }                  = getSeverity(availability);\n  const\
+          \ healthFactor             = availability / 100;\n\n  // ── Usuarios conectados\
+          \ ───────────────────────────────────────────────────\n  const users = app.baseUsers\
+          \ > 0\n    ? Math.round(jitter(app.baseUsers * healthFactor, app.baseUsers\
+          \ * 0.03))\n    : 0;\n\n  // ── Requests por minuto ───────────────────────────────────────────────────\n\
+          \  const requests = Math.round(jitter(app.baseRpm * healthFactor, app.baseRpm\
+          \ * 0.02));\n\n  // ── Tasa de error según severidad ────────────────────────────────────────\n\
+          \  let errorRateMin, errorRateMax;\n  if (tag === 'outage') {\n    errorRateMin\
+          \ = 0.40; errorRateMax = 0.80;\n  } else if (tag === 'degraded') {\n   \
+          \ errorRateMin = 0.05; errorRateMax = 0.15;\n  } else {\n    errorRateMin\
+          \ = 0.005; errorRateMax = 0.02;\n  }\n  const errorRate   = randomInRange(errorRateMin,\
+          \ errorRateMax, 4);\n  const totalErrors = Math.round(requests * errorRate);\n\
+          \n  // ── Distribución 4xx / 5xx ────────────────────────────────────────────────\n\
+          \  // En outage: más 5xx (servidor); en degradado: más 4xx (timeouts de\
+          \ auth)\n  const ratio5xx    = tag === 'outage' ? randomInRange(0.65, 0.85,\
+          \ 2)\n                    : tag === 'degraded' ? randomInRange(0.50, 0.70,\
+          \ 2)\n                    : randomInRange(0.30, 0.50, 2);\n  const errors5xx\
+          \   = Math.round(totalErrors * ratio5xx);\n  const errors4xx   = totalErrors\
+          \ - errors5xx;\n\n  // ── Revenue ───────────────────────────────────────────────────────────────\n\
+          \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
+          \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
+          \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
+          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
+          \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
+          \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
+          \ * Todas comparten las mismas dimensiones para que sean fácilmente joinables\
+          \ en DQL.\n */\nfunction buildAllMintLines(appConfig) {\n  const m   = generateAppMetrics(appConfig);\n\
+          \  const dim = `app=${appConfig.app},environment=${appConfig.environment},canal=${appConfig.canal},status=${m.tag}`;\n\
+          \n  const lines = [\n    `app.availability,${dim} ${m.availability}`,\n\
+          \    `app.users.connected,${dim} ${m.users}`,\n    `app.requests,${dim}\
+          \ ${m.requests}`,\n    `app.request.errors,${dim},http_status=4xx ${m.errors4xx}`,\n\
+          \    `app.request.errors,${dim},http_status=5xx ${m.errors5xx}`,\n    `app.transactions.revenue,${dim}\
+          \ ${m.revenue}`,\n  ];\n\n  return { lines, metrics: m, appConfig };\n}\n\
+          \n// ── API de disrupción ─────────────────────────────────────────────────────────\n\
+          \n/**\n * simulateDisruption({ apps, type, durationMs })\n *\n * Activa\
+          \ una disrupción a demanda. Afecta TODAS las métricas de forma\n * coherente:\
+          \ menos disponibilidad → menos usuarios → más errores → menos revenue.\n\
+          \ *\n * @param {string[]} options.apps       IDs afectados, o ['ALL'] para\
+          \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
+          \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
+          \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
+          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
+          \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
+          \ = null } = {}) {\n  if (!['OUTAGE', 'DEGRADED'].includes(type)) {\n  \
+          \  console.error(`❌ Tipo inválido \"${type}\". Usar 'OUTAGE' o 'DEGRADED'.`);\n\
+          \    return;\n  }\n\n  const targets = apps.includes('ALL')\n    ? applications.map((a)\
+          \ => a.app)\n    : apps.filter((id) => {\n        const found = applications.find((a)\
+          \ => a.app === id);\n        if (!found) console.warn(`  ⚠️  App no encontrada:\
+          \ \"${id}\" — omitida.`);\n        return !!found;\n      });\n\n  if (targets.length\
+          \ === 0) {\n    console.error('❌ simulateDisruption: no se encontraron apps\
+          \ válidas.');\n    return;\n  }\n\n  const expiresAt = durationMs !== null\
+          \ ? Date.now() + durationMs : null;\n  const expLabel  = expiresAt ? `expira\
+          \ en ${(durationMs / 1000).toFixed(0)}s` : 'indefinida';\n\n  targets.forEach((id)\
+          \ => activeDisruptions.set(id, { type, expiresAt }));\n\n  console.log('');\n\
+          \  console.log('╔════════════════════════════════════════════════════════╗');\n\
+          \  console.log(`║  \U0001F6A8 DISRUPCIÓN ACTIVADA — ${type.padEnd(28)}║`);\n\
+          \  console.log('╚════════════════════════════════════════════════════════╝');\n\
+          \  console.log(`  Tipo      : ${type}`);\n  console.log(`  Duración  : ${expLabel}`);\n\
+          \  console.log(`  Rango     : ${RANGES[type].min} – ${RANGES[type].max}\
+          \ %`);\n  console.log(`  Apps      : ${targets.join(', ')}`);\n  console.log('\
+          \  Impacto   : availability ↓  →  users ↓  →  errors ↑  →  revenue ↓');\n\
+          \  console.log('');\n}\n\n/**\n * clearDisruption(apps?)\n * Restaura el\
+          \ modo estable. Sin args limpia todas.\n *\n * @example  clearDisruption(['core-pagos-api']);\n\
+          \ * @example  clearDisruption();\n */\nfunction clearDisruption(apps) {\n\
+          \  const targets = apps ? apps : [...activeDisruptions.keys()];\n\n  if\
+          \ (targets.length === 0) {\n    console.log('ℹ️  No hay disrupciones activas\
+          \ para limpiar.');\n    return;\n  }\n\n  targets.forEach((id) => activeDisruptions.delete(id));\n\
+          \n  console.log('');\n  console.log('✅ Disrupciones limpiadas — retorno\
+          \ a modo ESTABLE:');\n  console.log(`   ${targets.join(', ')}`);\n  console.log('');\n\
+          }\n\n/** Muestra un resumen de las disrupciones activas. */\nfunction listActiveDisruptions()\
+          \ {\n  if (activeDisruptions.size === 0) {\n    console.log('ℹ️  No hay\
+          \ disrupciones activas.');\n    return;\n  }\n  console.log('\\n── Disrupciones\
+          \ activas ────────────────────────────────────');\n  activeDisruptions.forEach(({\
+          \ type, expiresAt }, appId) => {\n    const remaining = expiresAt\n    \
+          \  ? `${Math.max(0, Math.round((expiresAt - Date.now()) / 1000))}s restantes`\n\
+          \      : 'indefinida';\n    console.log(`  \U0001F6A8 ${appId.padEnd(25)}\
+          \  ${type.padEnd(9)}  [${remaining}]`);\n  });\n  console.log('');\n}\n\n\
+          // ── Funciones de ingesta ──────────────────────────────────────────────────────\n\
+          \n/**\n * Ingesta todas las métricas de todas las apps en una sola llamada\
+          \ MINT.\n */\nasync function ingestAllMetrics() {\n  const results     =\
+          \ applications.map(buildAllMintLines);\n  const mintPayload = results.flatMap((r)\
+          \ => r.lines).join('\\n');\n\n  // ── Log de consola coherente ────────────────────────────────────────────\n\
+          \  console.log('╔══════════════════════════════════════════════════════════════════════════════╗');\n\
+          \  console.log('║  Ingesta de métricas — Canales Digitales Financieros \
+          \                       ║');\n  console.log('╚══════════════════════════════════════════════════════════════════════════════╝');\n\
+          \  console.log(\n    '  App'.padEnd(28) +\n    'Status'.padEnd(11) +\n \
+          \   'Avail'.padStart(7) +\n    'Users'.padStart(8) +\n    'RPM'.padStart(8)\
+          \ +\n    '4xx'.padStart(7) +\n    '5xx'.padStart(7) +\n    'Revenue (S/)'.padStart(15),\n\
+          \  );\n  console.log('  ' + '─'.repeat(88));\n\n  results.forEach(({ metrics:\
+          \ m, appConfig }) => {\n    const { icon, label } = getSeverity(m.availability);\n\
+          \    console.log(\n      `  ${icon} ${appConfig.app.padEnd(25)}` +\n   \
+          \   `${label.padEnd(9)}  ` +\n      `${String(m.availability).padStart(6)}%`\
+          \ +\n      `${String(m.users).padStart(8)}` +\n      `${String(m.requests).padStart(8)}`\
+          \ +\n      `${String(m.errors4xx).padStart(7)}` +\n      `${String(m.errors5xx).padStart(7)}`\
+          \ +\n      `${m.revenue.toLocaleString('es-PE', { minimumFractionDigits:\
+          \ 2 }).padStart(15)}`,\n    );\n  });\n\n  console.log('\\n── Payload MINT\
+          \ ────────────────────────────────────────────────────────────────');\n\
+          \  console.log(mintPayload);\n  console.log('────────────────────────────────────────────────────────────────────────────────\\\
+          n');\n\n  try {\n    const response = await metricsClient.ingest({ body:\
+          \ mintPayload });\n    console.log('✅ Ingesta exitosa:', response);\n  \
+          \  return response;\n  } catch (error) {\n    console.error('❌ Error en\
+          \ la ingesta:', error);\n    throw error;\n  }\n}\n\n/**\n * Ingesta todas\
+          \ las métricas de una sola aplicación.\n */\nasync function ingestSingleApp(appId)\
+          \ {\n  const appConfig = applications.find((a) => a.app === appId);\n\n\
+          \  if (!appConfig) {\n    console.error(`❌ Aplicación no encontrada: \"\
+          ${appId}\"`);\n    return;\n  }\n\n  const { lines, metrics: m } = buildAllMintLines(appConfig);\n\
+          \  const { icon, label }       = getSeverity(m.availability);\n\n  console.log(`\\\
+          n\U0001F4E1 Ingesta individual — ${appConfig.name}`);\n  console.log(` \
+          \  Estado        : ${icon} ${label}  (fuente: ${m.source})`);\n  console.log(`\
+          \   Availability  : ${m.availability} %`);\n  console.log(`   Users    \
+          \     : ${m.users}`);\n  console.log(`   Requests/min  : ${m.requests}`);\n\
+          \  console.log(`   Errors 4xx    : ${m.errors4xx}`);\n  console.log(`  \
+          \ Errors 5xx    : ${m.errors5xx}`);\n  console.log(`   Revenue       : S/\
+          \ ${m.revenue.toLocaleString('es-PE', { minimumFractionDigits: 2 })}`);\n\
+          \  console.log(`   Payload:`);\n  lines.forEach((l) => console.log(`   \
+          \  ${l}`));\n  console.log('');\n\n  try {\n    const response = await metricsClient.ingest({\
+          \ body: lines.join('\\n') });\n    console.log(`✅ [${appConfig.name}] Ingesta\
+          \ exitosa:`, response);\n    return response;\n  } catch (error) {\n   \
+          \ console.error(`❌ [${appConfig.name}] Error:`, error);\n    throw error;\n\
+          \  }\n}\n\n// ── Ejecución principal ───────────────────────────────────────────────────────\n\
+          \n// Ingesta completa — todas las métricas, todos los canales\ningestAllMetrics();\n\
+          \n// ── Ejemplos de disrupción (descomentar según necesidad) ──────────────────────\n\
+          \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
+          \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
+          \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
+          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
+          \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
+          \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
+          // ingestAllMetrics();\n\n// 4. Ver disrupciones activas\n// listActiveDisruptions();\n\
+          \n// 5. Limpiar una disrupción específica\n// clearDisruption(['core-pagos-api']);\n\
+          // ingestAllMetrics();\n\n// 6. Limpiar todas las disrupciones\n// clearDisruption();\n\
+          // ingestAllMetrics();\n\n// 7. Ingesta individual de una sola app\n// ingestSingleApp('plataforma-creditos');"
+      action: dynatrace.automations:run-javascript
+      position:
+        x: 0
+        y: 2
+      conditions:
+        states:
+          run_javascript_1: OK
+      description: Run custom JavaScript code.
+      predecessors:
+      - run_javascript_1
