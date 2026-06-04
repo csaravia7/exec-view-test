@@ -2,9 +2,9 @@
   "$schema": "./.dt-app/app.config.schema.json",
   "environmentUrl": "https://yaj06303.sprint.apps.dynatracelabs.com/",
   "app": {
-    "name": "exec-view-test",
-    "version": "0.0.9",
-    "description": "A starting project with routing, fetching data, and charting",
+    "name": "Executive View Test",
+    "version": "0.0.10",
+    "description": "Executive view test app",
     "id": "my.exec.view.test",
     "scopes": [
       { "name": "storage:logs:read", "comment": "default template" },

@@ -8,9 +8,9 @@ import { Executive } from "./pages/Executive";
 export const App = () => {
   return (
     <Page>
-      <Page.Header>
+      {/*<Page.Header>
         <Header />
-      </Page.Header>
+      </Page.Header>*/}
       <Page.Main>
         <Routes>
           <Route path="/" element={<Executive />} />

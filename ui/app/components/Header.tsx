@@ -6,10 +6,6 @@ export const Header = () => {
   return (
     <AppHeader>
       <AppHeader.NavItems>
-        <AppHeader.AppNavLink as={Link} to="/" />
-        <AppHeader.NavItem as={Link} to="/">
-          Executive View
-        </AppHeader.NavItem>
         {/* <AppHeader.NavItem as={Link} to="/data">
           Explore Data
         </AppHeader.NavItem> */}
