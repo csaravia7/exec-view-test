@@ -1101,8 +1101,8 @@ const formatCurrency = (value: number) =>
   Number.isFinite(value)
     ? value.toLocaleString(undefined, {
         style: "currency",
-        currency: "PEN",
-        maximumFractionDigits: 0,
+        currency: "USD",
+        maximumFractionDigits: 2,
       })
     : "—";
 

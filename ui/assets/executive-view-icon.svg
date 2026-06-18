@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Executive View icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="url(#bg)"/>
+
+  <path d="M120 324 L188 256 L246 292 L332 198 L392 234" fill="none" stroke="#e2e8f0" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="116" y="340" width="56" height="84" rx="12" fill="url(#bars)"/>
+  <rect x="200" y="308" width="56" height="116" rx="12" fill="url(#bars)"/>
+  <rect x="284" y="274" width="56" height="150" rx="12" fill="url(#bars)"/>
+  <rect x="368" y="238" width="56" height="186" rx="12" fill="url(#bars)"/>
+
+  <circle cx="188" cy="256" r="10" fill="#f8fafc"/>
+  <circle cx="246" cy="292" r="10" fill="#f8fafc"/>
+  <circle cx="332" cy="198" r="10" fill="#f8fafc"/>
+</svg>

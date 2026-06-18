@@ -3,7 +3,7 @@ metadata:
   dependencies:
     apps:
     - id: dynatrace.automations
-      version: ^1.3023.1
+      version: ^1.3074.2
   inputs: []
 workflow:
   title: Template - Metrics Availability by App/Canal
@@ -16,7 +16,7 @@ workflow:
         type: interval
         intervalMinutes: 1
       filterParameters:
-        earliestStart: '2026-05-04'
+        earliestStart: '2026-04-28'
         earliestStartTime: '14:03'
       timezone: America/Lima
       inputs: {}
@@ -47,12 +47,12 @@ workflow:
           \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
           \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
           \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
-          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \    app: 'app-banca-personas',  name: 'BPI Banca Personas',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
-          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'Banca Empresas',\n\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'BIE Banca Empresas',\n\
           \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
           \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
-          \ name: 'Web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \ name: 'PLIN Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
           \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
           \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
@@ -140,9 +140,9 @@ workflow:
           \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
           \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
           \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
-          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
-          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
-          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat(((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise)/1000).toFixed(2))\n    : 0;\n\n  return\
+          \ {\n    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
           \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
           \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
           \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
@@ -162,8 +162,8 @@ workflow:
           \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
           \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
           \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
-          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
-          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en BPI y\
+          \ PLIN\n *   simulateDisruption({ apps: ['bpi-banca-personas', 'plin-transferencias'],\
           \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
           \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
           \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
@@ -249,8 +249,8 @@ workflow:
           \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
           \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
           \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
-          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
-          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ de 2 min en BPI y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['bpi-banca-personas',\
           \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
           \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
           \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
@@ -285,12 +285,12 @@ workflow:
           \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
           \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
           \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
-          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \    app: 'app-banca-personas',  name: 'BPI Banca Personas',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
-          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'BIE Banca Empresas',\n\
           \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
           \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
-          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \ name: 'PLIN Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
           \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
           \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
@@ -378,9 +378,9 @@ workflow:
           \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
           \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
           \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
-          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
-          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
-          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat(((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise)/1000).toFixed(2))\n    : 0;\n\n  return\
+          \ {\n    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
           \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
           \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
           \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
@@ -400,8 +400,8 @@ workflow:
           \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
           \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
           \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
-          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
-          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en BPI y\
+          \ PLIN\n *   simulateDisruption({ apps: ['bpi-banca-personas', 'plin-transferencias'],\
           \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
           \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
           \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
@@ -487,8 +487,8 @@ workflow:
           \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
           \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
           \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
-          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
-          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ de 2 min en BPI y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['bpi-banca-personas',\
           \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
           \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
           \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
@@ -496,6 +496,31 @@ workflow:
           \n// 5. Limpiar una disrupción específica\n// clearDisruption(['core-pagos-api']);\n\
           // ingestAllMetrics();\n\n// 6. Limpiar todas las disrupciones\n// clearDisruption();\n\
           // ingestAllMetrics();\n\n// 7. Ingesta individual de una sola app\n// ingestSingleApp('plataforma-creditos');"
+        sdkMajorVersions:
+          '@dynatrace-sdk/units': '1'
+          '@dynatrace-sdk/client-hub': '1'
+          '@dynatrace-sdk/client-iam': '1'
+          '@dynatrace-sdk/adhoc-utils': '1'
+          '@dynatrace-sdk/http-client': '1'
+          '@dynatrace-sdk/client-query': '1'
+          '@dynatrace-sdk/shared-errors': '1'
+          '@dynatrace-sdk/error-handlers': '1'
+          '@dynatrace-sdk/app-environment': '1'
+          '@dynatrace-sdk/client-document': '1'
+          '@dynatrace-sdk/automation-utils': '2'
+          '@dynatrace-sdk/user-preferences': '1'
+          '@dynatrace-sdk/client-automation': '5'
+          '@dynatrace-sdk/client-hub-catalog': '0'
+          '@dynatrace-sdk/shared-client-utils': '1'
+          '@dynatrace-sdk/client-resource-store': '1'
+          '@dynatrace-sdk/client-davis-analyzers': '1'
+          '@dynatrace-sdk/client-bucket-management': '3'
+          '@dynatrace-sdk/client-app-engine-registry': '3'
+          '@dynatrace-sdk/client-classic-environment-v1': '2'
+          '@dynatrace-sdk/client-classic-environment-v2': '4'
+          '@dynatrace-sdk/client-app-engine-edge-connect': '1'
+          '@dynatrace-sdk/client-filter-segment-management': '1'
+          '@dynatrace-sdk/client-platform-management-service': '1'
       action: dynatrace.automations:run-javascript
       position:
         x: -1
@@ -523,12 +548,12 @@ workflow:
           \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
           \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
           \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
-          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \    app: 'app-banca-personas',  name: 'BPI Banca Personas',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
-          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'BIE Banca Empresas',\n\
           \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
           \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
-          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \ name: 'PLIN Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
           \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
           \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
@@ -616,9 +641,9 @@ workflow:
           \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
           \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
           \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
-          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
-          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
-          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat(((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise)/1000).toFixed(2))\n    : 0;\n\n  return\
+          \ {\n    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
           \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
           \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
           \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
@@ -638,8 +663,8 @@ workflow:
           \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
           \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
           \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
-          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
-          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en BPI y\
+          \ PLIN\n *   simulateDisruption({ apps: ['bpi-banca-personas', 'plin-transferencias'],\
           \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
           \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
           \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
@@ -725,8 +750,8 @@ workflow:
           \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
           \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
           \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
-          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
-          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ de 2 min en BPI y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['bpi-banca-personas',\
           \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
           \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
           \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
@@ -761,12 +786,12 @@ workflow:
           \nconst applications = [\n  {\n    app: 'app-mobile-retail',   name: 'App\
           \ Mobile Retail',\n    environment: 'produccion',  canal: 'mobile',\n  \
           \  baseUsers: 12000,  baseRpm: 8500,  revenuePerTx: 45.00,\n  },\n  {\n\
-          \    app: 'app-banca-personas',  name: 'app Banca Personas',\n    environment:\
+          \    app: 'app-banca-personas',  name: 'BPI Banca Personas',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 9500,   baseRpm: 6200,  revenuePerTx:\
-          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'app Banca Empresas',\n\
+          \ 180.00,\n  },\n  {\n    app: 'app-banca-empresas',  name: 'BIE Banca Empresas',\n\
           \    environment: 'produccion',  canal: 'web',\n    baseUsers: 3200,   baseRpm:\
           \ 4800,  revenuePerTx: 950.00,\n  },\n  {\n    app: 'web-transferencias',\
-          \ name: 'web Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
+          \ name: 'PLIN Transferencias',\n    environment: 'produccion',  canal: 'mobile',\n\
           \    baseUsers: 18000,  baseRpm: 14000, revenuePerTx: 220.00,\n  },\n  {\n\
           \    app: 'portal-inversiones',  name: 'Portal de Inversiones',\n    environment:\
           \ 'produccion',  canal: 'web',\n    baseUsers: 1800,   baseRpm: 1200,  revenuePerTx:\
@@ -854,9 +879,9 @@ workflow:
           \  // Solo las requests exitosas (sin error) generan ingreso transaccional.\n\
           \  const successfulRequests = Math.max(0, requests - totalErrors);\n  const\
           \ revenueNoise       = randomInRange(0.90, 1.10, 4);   // ±10 % de ruido\n\
-          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat((successfulRequests\
-          \ * app.revenuePerTx * revenueNoise).toFixed(2))\n    : 0;\n\n  return {\n\
-          \    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
+          \  const revenue            = app.revenuePerTx > 0\n    ? parseFloat(((successfulRequests\
+          \ * app.revenuePerTx * revenueNoise)/1000).toFixed(2))\n    : 0;\n\n  return\
+          \ {\n    availability,\n    users,\n    requests,\n    errors4xx,\n    errors5xx,\n\
           \    revenue,\n    source,\n    tag,\n  };\n}\n\n// ── Construcción de líneas\
           \ MINT ───────────────────────────────────────────────\n\n/**\n * Genera\
           \ todas las líneas MINT para una app a partir de sus métricas coherentes.\n\
@@ -876,8 +901,8 @@ workflow:
           \ todas.\n * @param {'OUTAGE'|'DEGRADED'} [options.type='OUTAGE']\n * @param\
           \ {number|null} [options.durationMs=null]  null = indefinida.\n *\n * @example\
           \  Outage indefinido en Core Pagos API\n *   simulateDisruption({ apps:\
-          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en app y\
-          \ web\n *   simulateDisruption({ apps: ['app-banca-personas', 'web-transferencias'],\
+          \ ['core-pagos-api'] });\n *\n * @example  Degradación de 2 min en BPI y\
+          \ PLIN\n *   simulateDisruption({ apps: ['bpi-banca-personas', 'plin-transferencias'],\
           \ type: 'DEGRADED', durationMs: 120_000 });\n *\n * @example  Outage global\
           \ de 30 s\n *   simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\
           \ */\nfunction simulateDisruption({ apps = [], type = 'OUTAGE', durationMs\
@@ -963,8 +988,8 @@ workflow:
           \n// 1. Outage crítico indefinido en Core Pagos API\n//    → availability\
           \ cae a 0-15 %, errores 5xx se disparan, revenue = 0\n// simulateDisruption({\
           \ apps: ['core-pagos-api'] });\n// ingestAllMetrics();\n\n// 2. Degradación\
-          \ de 2 min en app y Plataforma de Créditos\n//    → availability 50-79 %,\
-          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['app-banca-personas',\
+          \ de 2 min en BPI y Plataforma de Créditos\n//    → availability 50-79 %,\
+          \ errores 4xx suben, revenue parcial\n// simulateDisruption({ apps: ['bpi-banca-personas',\
           \ 'plataforma-creditos'], type: 'DEGRADED', durationMs: 120_000 });\n//\
           \ ingestAllMetrics();\n\n// 3. Outage global de 30 segundos en TODAS las\
           \ apps\n// simulateDisruption({ apps: ['ALL'], durationMs: 30_000 });\n\

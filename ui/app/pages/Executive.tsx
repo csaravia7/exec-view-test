@@ -95,16 +95,15 @@ timeseries {
   requests = sum(app.requests, scalar: true),
   errors = sum(app.request.errors, scalar: true),
   revenue = sum(app.transactions.revenue, scalar: true)
-}, by: { dt.rum.application.entity }, from: now() - ${timeframe}
-| lookup [fetch dt.entity.application], sourceField: dt.rum.application.entity, lookupField: id, fields: { entity.name }
+}, by: {app}, from: now() - ${timeframe}
 | fieldsAdd
-    app_name = entity.name,
+    app_name = app,
     availability = if(isNotNull(availability), availability, else: 0.0),
     connected_users = if(isNotNull(connected_users), connected_users, else: 0),
     requests = if(isNotNull(requests), requests, else: 0),
     errors = if(isNotNull(errors), errors, else: 0),
     revenue = if(isNotNull(revenue), revenue, else: 0)
-| fields app_name, dt.rum.application.entity, availability, connected_users, requests, errors, revenue
+| fields app_name, availability, connected_users, requests, errors, revenue
 | sort availability desc
 `;
 
@@ -1126,8 +1125,8 @@ const formatCurrency = (n: number) =>
   Number.isFinite(n)
     ? n.toLocaleString(undefined, {
         style: "currency",
-        currency: "PEN",
-        maximumFractionDigits: 0,
+        currency: "USD",
+        maximumFractionDigits: 2,
       })
     : "—";
 

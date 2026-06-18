@@ -52,8 +52,8 @@ export const Data = () => {
     <>
       <Flex flexDirection="column" alignItems="center" padding={32}>
         <img
-          src="./assets/Dynatrace_Logo.svg"
-          alt="Dynatrace Logo"
+          src="./assets/executive-view-icon.svg"
+          alt="Executive View Icon"
           width={150}
           height={150}
           style={{ paddingBottom: 32 }}
