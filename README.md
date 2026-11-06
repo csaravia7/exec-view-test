@@ -1,297 +1,294 @@
-# Executive View Test - Dynatrace App
+<div align="center">
 
-## 📋 Descripción General
+# 📊 Executive View
 
-**Executive View Test** es una aplicación Dynatrace diseñada para proporcionar una vista ejecutiva consolidada del estado y performance de tus aplicaciones. Permite visualizar métricas clave de disponibilidad, usuarios conectados, volumen de solicitudes, errores y generación de ingresos en tiempo real.
+**A real-time executive view of availability, users, traffic, errors and revenue per application.**
 
-La aplicación está construida con **React** y **TypeScript** usando el Dynatrace App Toolkit, integrándose directamente con el Dynatrace Platform para consultar datos desde Grail (Dynatrace's data lake) mediante **DQL** (Dynatrace Query Language).
+![Dynatrace](https://img.shields.io/badge/Dynatrace-AppEngine-1496FF?logo=dynatrace&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![Strato](https://img.shields.io/badge/Design%20System-Strato-6F2DA8)
+![Version](https://img.shields.io/badge/version-0.0.13-success)
 
-### 🎯 Casos de Uso
+[✨ Features](#-features) · [🧩 Prerequisite: metrics](#-prerequisite-create-the-metrics) · [🚀 Installation](#-quick-installation) · [🛠️ Customization](#️-customization) · [🐛 Troubleshooting](#-troubleshooting)
 
-- **Monitoreo de Disponibilidad**: Visualiza la disponibilidad de tus aplicaciones en diferentes timeframes
-- **Análisis de Impacto de Usuarios**: Observa cuántos usuarios están conectados en tiempo real
-- **Seguimiento de Errores**: Identifica aplicaciones con tasas altas de error
-- **Análisis de Ingresos**: Correlaciona el rendimiento técnico con el impacto en ingresos
-- **Reporting**: Exporta datos a CSV para análisis posteriores e imprime reportes
+</div>
 
-## 📁 Estructura del Proyecto
+---
 
+## 📖 What is it?
+
+**Executive View** is a Dynatrace App (React + TypeScript + Strato) that queries **Grail** with **DQL** and shows, for each application/channel, five key business and technical indicators:
+
+| Icon | Indicator | Description |
+|:---:|---|---|
+| 🟢 | **Availability** | Availability % with a traffic light (Operational / Degraded / Critical) |
+| 👥 | **Connected users** | Concurrent users |
+| 🔁 | **Requests** | Request volume |
+| ❌ | **Errors** | Failed requests |
+| 💰 | **Revenue** | Transacted amount |
+
+> ⚠️ **Important:** the app does **not use built-in** Dynatrace metrics. It reads **5 custom metrics** (`app.*`) that you **must create before** deploying it. Without them, the app shows everything as `0`. See [Prerequisite](#-prerequisite-create-the-metrics).
+
+---
+
+## ✨ Features
+
+- 🧭 **Two tabs**: *Overview* (KPIs + trend) and *Channel detail* (one card per application). The selected tab is remembered (`localStorage`).
+- ⏱️ **Timeframe selector**: 5m · 10m · 30m · 1h · 6h · 24h.
+- 🔄 **Manual refresh** with a last-updated indicator.
+- 📈 **Availability trend** using `TimeseriesChart` (interval chosen automatically from the timeframe).
+- 🚦 **SLA traffic light** (configurable thresholds, see [Customization](#️-customization)).
+- 🗂️ **Grid of up to 30 applications**, sorted by availability.
+- ⬇️ **Export CSV** — `channel-detail-{timeframe}-{timestamp}.csv`.
+- 🖨️ **Print Cards** — clean print of the grid (A4).
+- 🌗 **Automatic light/dark theme**.
+- 📱 **Responsive** (mobile friendly).
+
+---
+
+## 🧩 Prerequisite: create the metrics
+
+The app runs this query (see `ui/app/pages/Executive.tsx` and `ui/app/pages/ChannelDetail.tsx`):
+
+```dql
+timeseries {
+  availability    = avg(app.availability, scalar: true),
+  connected_users = avg(app.users.connected, scalar: true),
+  requests        = sum(app.requests, scalar: true),
+  errors          = sum(app.request.errors, scalar: true),
+  revenue         = sum(app.transactions.revenue, scalar: true)
+}, by: { app }, from: now() - <timeframe>
 ```
-exec-view-test/
-├── ui/                          # Código del frontend (React + TypeScript)
-│   ├── app/
-│   │   ├── App.tsx              # Componente raíz con enrutamiento
-│   │   ├── components/
-│   │   │   ├── Header.tsx        # Navegación principal
-│   │   │   └── Card.tsx          # Componente de tarjeta reutilizable
-│   │   └── pages/
-│   │       ├── Home.tsx          # Página de inicio
-│   │       ├── Executive.tsx      # Dashboard ejecutivo con gráficos
-│   │       ├── ChannelDetail.tsx  # Vista detallada de aplicaciones (canal)
-│   │       └── Data.tsx           # Tabla de datos brutos
-│   ├── main.tsx                 # Punto de entrada de React
-│   ├── assets/                  # Imágenes y recursos estáticos
-│   └── tsconfig.json            # Configuración de TypeScript
-├── app.config.json              # Configuración de la app (nombre, ID, scopes)
-├── package.json                 # Dependencias del proyecto
-├── eslint.config.mjs            # Configuración de linting
-├── guide.md                      # Guía rápida de desarrollo
-└── README.md                    # Este archivo
-```
 
-## ✨ Características Principales
+### 📐 Required metric structure
 
-### 1. **Vista de Detalle de Canal (ChannelDetail)**
-   - Grid responsivo mostrando hasta 30 aplicaciones
-   - Tarjetas con información de cada aplicación:
-     - Nombre de la aplicación
-     - Porcentaje de disponibilidad con indicador visual
-     - Usuarios conectados
-     - Volumen de solicitudes
-     - Cantidad de errores
-     - Ingresos generados
-   - **Botón Export CSV**: Descarga los datos en formato CSV para análisis externo
-   - **Botón Print Cards**: Imprime solo el grid de tarjetas (vista limpia para reportes)
-   - Selector de timeframe (últimos 5m, 10m, 30m, 1h, 6h, 24h)
+| # | Metric key | Type | Aggregation used | Unit | Description |
+|:-:|---|:-:|:-:|:-:|---|
+| 1 | `app.availability` | gauge | `avg` | `%` (0–100) | Application availability |
+| 2 | `app.users.connected` | gauge | `avg` | count | Connected / concurrent users |
+| 3 | `app.requests` | count | `sum` | count | Number of requests |
+| 4 | `app.request.errors` | count | `sum` | count | Number of failed requests |
+| 5 | `app.transactions.revenue` | count | `sum` | currency (USD) | Revenue from transactions |
 
-### 2. **Dashboard Ejecutivo (Executive)**
-   - Visualización de métricas clave en KPI tiles
-   - Gráficos de series de tiempo para análisis histórico
-   - Vista consolidada para presentaciones ejecutivas
+### 🏷️ Dimensions
 
-### 3. **Vista de Datos Brutos (Data)**
-   - Tabla completa de datos sin procesar
-   - Ideal para análisis detallado y debugging
+| Dimension | Required | Applies to | Description |
+|---|:-:|---|---|
+| `app` | ✅ **Yes** | All 5 metrics | Application/channel identifier or name. Used in `by: { app }` and shown as the title of each card. |
 
-### 4. **Página de Inicio (Home)**
-   - Tarjetas de navegación hacia diferentes secciones
-   - Punto de entrada amigable para nuevos usuarios
+> 💡 Use **consistent `app` values** across all 5 metrics (e.g. `web-portal`, `mobile-app`, `call-center`). A different value in one metric will show up as a separate card.
+> You can add extra dimensions (region, environment…), but **the app only groups by `app`**; the rest are aggregated.
 
-## 🚀 Guía de Inicio Rápido
+### 🧱 Ways to create the metrics
 
-### Requisitos Previos
-- **Node.js** 16.x o superior
-- **npm** 7.x o superior
-- Acceso a un **environment Dynatrace** con datos de RUM (Real User Monitoring)
-- Dynatrace App Toolkit instalado globalmente: `npm install -g @dynatrace/dt-app`
+<details>
+<summary><b>Option A — Direct ingestion (Metrics API v2, line protocol)</b></summary>
 
-### Instalación
+Requires a token with the `metrics.ingest` scope.
 
-1. **Clonar o descargar el proyecto**
-   ```bash
-   cd exec-view-test
-   ```
-
-2. **Instalar dependencias**
-   ```bash
-   npm install
-   ```
-
-3. **Configurar el environment Dynatrace**
-   - Abre `app.config.json`
-   - Reemplaza `environmentUrl` con tu URL de Dynatrace
-   ```json
-   {
-     "environmentUrl": "https://tu-environment.dynatracelabs.com/"
-   }
-   ```
-
-4. **Verificar permisos (Scopes)**
-   - La app requiere estos permisos en tu Dynatrace environment:
-     - `storage:logs:read` - Lectura de logs
-     - `storage:buckets:read` - Lectura de buckets
-     - `storage:metrics:read` - Lectura de métricas RUM
-     - `storage:entities:read` - Lectura de entidades de aplicaciones
-
-### Desarrollo Local
-
-#### Iniciar el servidor de desarrollo
 ```bash
-npm run start
+curl -X POST "https://<ENV_ID>.live.dynatrace.com/api/v2/metrics/ingest" \
+  -H "Authorization: Api-Token <TOKEN>" \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data-binary @- <<'EOF'
+app.availability,app=web-portal gauge,99.95
+app.users.connected,app=web-portal gauge,1250
+app.requests,app=web-portal count,delta=480
+app.request.errors,app=web-portal count,delta=3
+app.transactions.revenue,app=web-portal count,delta=15230.50
+EOF
 ```
-- Se abrirá automáticamente `http://localhost:8080`
-- Los cambios se reflejan en vivo (hot reload)
-- Los errores aparecerán en la consola del navegador
 
-#### Editar componentes
-- Modifica archivos en `ui/app/` y guarda
-- La página se recargará automáticamente
-- Verifica errores de TypeScript/ESLint en la terminal
+> Send the data points periodically (e.g. every minute) from your system, an OpenTelemetry Collector, a script or a Dynatrace Workflow.
+</details>
 
-## 📚 Comandos Disponibles
+<details>
+<summary><b>Option B — Extract metrics from logs / business events / spans (OpenPipeline)</b></summary>
 
-### Desarrollo
-| Comando | Descripción |
-|---------|-------------|
-| `npm run start` | Inicia el servidor de desarrollo con hot reload |
-| `npm run build` | Compila la app para producción en carpeta `dist/` |
+In **Settings → Process and contextualize → OpenPipeline**, create one *metric extraction* per metric:
 
-### Despliegue
-| Comando | Descripción |
-|---------|-------------|
-| `npm run deploy` | Construye y despliega la app al environment configurado en `app.config.json` |
-| `npm run uninstall` | Desinstala la app del environment Dynatrace |
+| Metric key | Source | Extraction | Dimension |
+|---|---|---|---|
+| `app.requests` | logs / bizevents / spans | Counter (record count) | `app` |
+| `app.request.errors` | same source, filtered by error | Counter with an error matcher (e.g. `status >= 500`) | `app` |
+| `app.transactions.revenue` | bizevents | Sum of a numeric field (e.g. `amount`) | `app` |
+| `app.availability` | derived or ingested | Value (gauge) 0–100 | `app` |
+| `app.users.connected` | derived or ingested | Value (gauge) | `app` |
 
-### Mantenimiento
-| Comando | Descripción |
-|---------|-------------|
-| `npm run update` | Actualiza paquetes de Dynatrace SDK a la última versión |
-| `npm run generate:function` | Genera una nueva función serverless en la carpeta `api/` |
+Make sure the field in your source that identifies the application is mapped to the **`app`** dimension.
+</details>
 
-### Utilidades
-| Comando | Descripción |
-|---------|-------------|
-| `npm run info` | Muestra información del CLI y environment |
-| `npm run help` | Muestra ayuda completa del Dynatrace App Toolkit |
+<details>
+<summary><b>Option C — External source via OpenTelemetry / Micrometer / StatsD</b></summary>
 
-## 🔧 Configuración
+Any instrumentation that publishes those metric keys (with the `app` dimension) to Dynatrace is valid.
+</details>
 
-### `app.config.json`
-Este archivo controla la configuración de la aplicación:
+### ✅ Verify the metrics exist
+
+Run this in a Dynatrace **Notebook**:
+
+```dql
+timeseries {
+  availability    = avg(app.availability),
+  connected_users = avg(app.users.connected),
+  requests        = sum(app.requests),
+  errors          = sum(app.request.errors),
+  revenue         = sum(app.transactions.revenue)
+}, by: { app }, from: now() - 1h
+```
+
+If it returns one series per `app`, you're ready ✔️.
+
+---
+
+## 🚀 Quick installation
+
+### 1️⃣ Requirements
+
+- 🟩 **Node.js** ≥ 16.13 and **npm**
+- ☁️ A **Dynatrace Platform** tenant (`*.apps.dynatrace.com`) with AppEngine
+- 📊 The **5 metrics** above already created and receiving data
+- 🔑 Permission to install apps (`app-engine:apps:install`) on the tenant
+
+### 2️⃣ Clone and install
+
+```bash
+git clone <REPOSITORY_URL> exec-view
+cd exec-view
+npm install
+```
+
+### 3️⃣ Configure `app.config.json`
 
 ```json
 {
-  "environmentUrl": "https://tu-environment.dynatracelabs.com/",
+  "environmentUrl": "https://<your-tenant>.apps.dynatrace.com/",
   "app": {
-    "name": "exec-view-test",           // Nombre mostrado en UI
-    "id": "my.exec.view.test",          // ID único de la app
-    "version": "0.0.9",                 // Versión semántica
-    "description": "...",               // Descripción corta
-    "scopes": [...]                     // Permisos requeridos
+    "name": "Executive View",
+    "id": "my.company.executive.view",
+    "version": "0.0.1"
   }
 }
 ```
 
-**Importante**: Cambia `environmentUrl` a tu Dynatrace environment antes de ejecutar.
+| Field | What to do |
+|---|---|
+| `environmentUrl` | ✏️ Change it to **your** tenant. |
+| `app.id` | ✏️ Use a unique ID (recommended: your company/domain). |
+| `app.version` | Increase it on every deployment (the same version cannot be redeployed). |
 
-## 📊 Querys DQL Utilizadas
+### 4️⃣ Required scopes
 
-La app ejecuta queries DQL (Dynatrace Query Language) para obtener datos:
+Already defined in `app.config.json`:
 
-### ChannelDetail - Snapshot de Métricas
-```dql
-timeseries {
-  availability = avg(app.availability, scalar: true),
-  connected_users = avg(app.users.connected, scalar: true),
-  requests = sum(app.requests, scalar: true),
-  errors = sum(app.request.errors, scalar: true),
-  revenue = sum(app.transactions.revenue, scalar: true)
-}, by: { app }
+| Scope | Purpose |
+|---|---|
+| `storage:metrics:read` | 📈 Read the `app.*` metrics (**essential**) |
+| `storage:entities:read` | 🏷️ Resolve entity names |
+| `storage:buckets:read` | 🪣 Access Grail buckets |
+| `storage:logs:read` | 📜 Read logs (default template / *Data* page) |
+
+> End users also need an IAM policy granting read access to metrics (`storage:metrics:read`).
+
+### 5️⃣ Run
+
+```bash
+npm run start    # 🔥 development mode with hot reload
 ```
 
-Puedes encontrar estas queries en `ui/app/pages/ChannelDetail.tsx` y `Executive.tsx`.
+### 6️⃣ Deploy
 
-## 🎨 Componentes Principales
-
-### `ChannelDetail` (`ui/app/pages/ChannelDetail.tsx`)
-- **Props**:
-  - `embedded`: Boolean - Controla estilo en modo embebido
-  - `selectedId`: String - ID de app seleccionada
-  - `timeframe`: "5m" | "10m" | "30m" | "1h" | "6h" | "24h"
-  - `onTimeframeChange`: Callback para cambios de timeframe
-
-- **Características**:
-  - KPI tiles con métricas consolidadas
-  - Grid responsivo de aplicaciones
-  - Export a CSV con timestamp
-  - Impresión de grid limpio (sin header/footer)
-  - Indicadores de estado (Operational, Degraded, Critical)
-  - Progress bars para visualización de disponibilidad
-
-### `Card` (`ui/app/components/Card.tsx`)
-- Componente de navegación con imagen y nombre
-- Soporta links internos y externos
-- Estilizado con Strato Design System
-
-## 📤 Exportar y Imprimir
-
-### Exportar a CSV
-- Click en el botón **"Export CSV"** en ChannelDetail
-- Descarga automática de archivo `channel-detail-{timeframe}-{timestamp}.csv`
-- Contiene: nombre, ID, disponibilidad, estado, usuarios, solicitudes, errores, ingresos
-
-### Imprimir Grid
-- Click en el botón **"Print Cards"**
-- Se abre el diálogo de impresión del navegador
-- Solo muestra el grid de tarjetas (sin navbar, sidebar, etc.)
-- Optimizado para papel A4
-
-## 🔐 Permisos y Seguridad
-
-La app opera bajo el modelo de seguridad de Dynatrace:
-- **Scope-based access**: Solo accede a datos que el usuario tiene permiso
-- **API tokens**: Dynatrace gestiona automáticamente la autenticación
-- **Datos sensibles**: Números de ingresos se muestran en formato monetario (PEN)
-
-## 🐛 Troubleshooting
-
-### La app no carga datos
-**Causa**: Timeframe sin datos o permisos insuficientes
-```
-- Verifica que tu app tenga RUM data enabled
-- Confirma que los scopes estén configurados correctamente
-- Intenta cambiar el timeframe
+```bash
+npm run deploy   # 🚢 builds and deploys to the configured tenant
 ```
 
-### Error "403 Forbidden"
-**Causa**: Scopes insuficientes en `app.config.json`
-```
-- Asegúrate que todos los scopes están agregados en app.config.json
-- Redeploy la app: npm run deploy
-```
-
-### Cambios no se reflejan en desarrollo
-**Causa**: El hot reload no se activó
-```
-- Recarga manualmente: Ctrl+R o Cmd+R
-- Verifica la consola del navegador para errores
-- Revisa la terminal para errores de compilación
-```
-
-## 🤝 Desarrollo y Contribución
-
-### Estructura de Componentes
-- Componentes funcionales con React Hooks
-- TypeScript strict mode habilitado
-- Estilos inline con theme variables
-
-### Agregar Nueva Página
-1. Crea un archivo en `ui/app/pages/MiPagina.tsx`
-2. Actualiza rutas en `ui/app/App.tsx`
-3. Agrega navegación en `ui/app/components/Header.tsx`
-
-### Agregar Nueva Query DQL
-1. Define la query en tu componente
-2. Usa el hook `useDql` de `@dynatrace-sdk/react-hooks`
-3. Maneja estados de loading/error
-
-### Estándares de Código
-- **ESLint**: `npm run build` valida el código
-- **TypeScript**: Strict mode activo
-- **Formato**: Usa prettier (si está configurado)
-
-## 📖 Recursos Adicionales
-
-- **Documentación Oficial**: [Dynatrace Developer](https://dt-url.net/developers)
-- **Dynatrace Query Language (DQL)**: [DQL Docs](https://dt-url.net/dql)
-- **React Documentation**: [react.dev](https://react.dev)
-- **TypeScript Handbook**: [typescriptlang.org](https://www.typescriptlang.org/docs/)
-- **Dynatrace Strato Components**: [Strato Design System](https://dynatrace.github.io/strato-components/)
-
-## 📝 Notas de Versión
-
-### v0.0.9
-- ✨ Agregado botón "Export CSV" en ChannelDetail
-- ✨ Agregado botón "Print Cards" con impresión limpia del grid
-- 🎨 Íconos SVG en botones de acciones
-
-### Versiones Anteriores
-- v0.0.1: Versión inicial con routing, fetching de datos y charting
-
-## 📄 Licencia
-
-Este proyecto es propiedad de Dynatrace. Consulta con tu administrador para términos de uso.
+Then open **Apps → Executive View** in your tenant.
 
 ---
 
-**¿Necesitas ayuda?** Revisa la [guía rápida](guide.md) o contacta a tu administrador Dynatrace.
+## 🛠️ Customization
+
+| What | Where | Detail |
+|---|---|---|
+| 🚦 SLA thresholds (Overview) | `ui/app/pages/Executive.tsx` | `SLA_GOOD = 99`, `SLA_BAD = 95` |
+| 🚦 SLA thresholds (Detail) | `ui/app/pages/ChannelDetail.tsx` | `SLA_GOOD = 95`, `SLA_BAD = 90` |
+| 🔑 Metric names | `buildSnapshotQuery` in both files | Replace `app.availability`, `app.requests`… with your metric keys |
+| 🏷️ Grouping dimension | `by: { app }` | Replace `app` with your dimension (e.g. `service`) |
+| 💱 Currency | `ChannelDetail.tsx` (`Intl.NumberFormat`, `currency: "USD"`) | Change the ISO code (`PEN`, `EUR`…) |
+| ⏱️ Timeframes | `TIMEFRAMES` constant | Add/remove options |
+| 🗂️ Max cards | `rows.slice(0, 30)` in `ChannelDetail.tsx` | Adjust the limit |
+| 🎨 Colors / theme | `THEME_LIGHT` / `THEME_DARK` | `--exec-*` / `--app-*` CSS variables |
+
+> 📝 If you rename a metric or dimension, update **both** queries (Executive and ChannelDetail) to keep them consistent.
+
+---
+
+## 🗂️ Project structure
+
+```
+exec-view/
+├── ui/
+│   ├── main.tsx                   # Entry point
+│   ├── app/
+│   │   ├── App.tsx                # Routes (/ → Executive)
+│   │   ├── components/            # Header, Card
+│   │   └── pages/
+│   │       ├── Executive.tsx      # 📊 Overview + tabs + trend
+│   │       ├── ChannelDetail.tsx  # 🗂️ Per-app cards, CSV, Print
+│   │       ├── Data.tsx           # 🔍 DQL explorer (route disabled)
+│   │       └── Home.tsx           # 🏠 Home (not routed)
+│   └── assets/                    # Icons and images
+├── app.config.json                # App config and scopes
+├── package.json
+└── README.md
+```
+
+---
+
+## 📚 Commands
+
+| Command | Description |
+|---|---|
+| `npm run start` | 🔥 Development server |
+| `npm run build` | 📦 Production build into `dist/` |
+| `npm run deploy` | 🚢 Deploy to the tenant |
+| `npm run uninstall` | 🗑️ Uninstall the app |
+| `npm run update` | ⬆️ Update Dynatrace SDKs |
+| `npm run lint` | 🧹 ESLint |
+| `npm run info` | ℹ️ CLI/environment information |
+
+---
+
+## 🐛 Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Everything at `0` / no cards | Metrics don't exist or have no data in the timeframe | Run the [verification](#-verify-the-metrics-exist) query in a Notebook |
+| Duplicated or incomplete cards | Inconsistent `app` values across metrics | Unify the values of the `app` dimension |
+| `403 Forbidden` | Missing scopes or IAM permissions | Check `scopes` in `app.config.json` and redeploy; validate the user's policy |
+| Availability always 0 % | Metric on a 0–1 scale instead of 0–100 | Ingest as a percentage (0–100) or adjust the query |
+| `Version already exists` on deploy | Same version already published | Increase `app.version` |
+| Changes not visible in dev | Hot reload not applied | Reload the browser and check the terminal |
+
+---
+
+## 🔗 Resources
+
+- 📘 [Dynatrace Developer](https://dt-url.net/developers)
+- 🔎 [DQL — Dynatrace Query Language](https://dt-url.net/dql)
+- 🎨 [Strato Design System](https://developer.dynatrace.com/design/about-strato-design-system/)
+- 📡 [Metrics ingestion (API v2)](https://docs.dynatrace.com/docs/discover-dynatrace/references/dynatrace-api/environment-api/metric-v2/post-ingest-metrics)
+
+---
+
+## 📝 Release notes
+
+| Version | Changes |
+|---|---|
+| **0.0.13** | 🎨 Design and mobile UI improvements, Overview/Detail tabs, availability trend |
+| **0.0.9** | ⬇️ Export CSV and 🖨️ Print Cards |
+| **0.0.1** | 🌱 Initial version |
+
+---

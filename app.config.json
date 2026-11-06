@@ -1,9 +1,9 @@
 {
   "$schema": "./.dt-app/app.config.schema.json",
-  "environmentUrl": "https://jpm00417.apps.dynatrace.com/",
+  "environmentUrl": "https://rhz69353.apps.dynatrace.com/",
   "app": {
     "name": "Executive View Test",
-    "version": "0.0.1",
+    "version": "0.0.13",
     "description": "Executive view test app",
     "icon": "ui/assets/executive-view-icon.svg",
     "id": "my.exec.view.test",
